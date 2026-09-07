@@ -1,7 +1,9 @@
+cargo-features = ["unstable-editions"]
+
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.0"
-edition = "2024"
+version = "0.0.1"
+edition = "future"
 
 [dependencies]
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [] }
