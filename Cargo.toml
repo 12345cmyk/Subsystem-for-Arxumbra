@@ -1,9 +1,13 @@
 cargo-features = ["unstable-editions"]
 
 [package]
-name = "Subsystem-for-Arxumbra"
-version = "0.0.1"
+name = "Linux-Subsystem-for-Arxumbra"
+version = "0.1.0"
 edition = "future"
 
+[[bin]]
+name = "linux-subsystem-for-arxumbra"
+path = "src/main.rs"
+
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [] }
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = ["std", "ui_bevy_render", "bevy_winit", "wayland", "default_font", "multi_threaded", "bevy_sprite", "bevy_sprite_render"] }
