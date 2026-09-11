@@ -1,8 +1,8 @@
 cargo-features = ["unstable-editions"]
 
 [package]
-name = "Linux-Subsystem-for-Arxumbra"
-version = "0.1.0"
+name = "Subsystem-for-Arxumbra"
+version = "0.0.2"
 edition = "future"
 
 [[bin]]
