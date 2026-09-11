@@ -1,20 +1,20 @@
 [build]
-target = "x86_64-unknown-linux-musl"
-
-[target.x86_64-unknown-linux-musl]
+target = "x86_64-unknown-linux-gnu"
 rustflags = [
     "-Z", "unstable-options",
     "-C", "opt-level=3",
+    "-C", "target-cpu=generic",
     "-C", "lto=fat",
-    "-C", "embed-bitcode=yes",
     "-C", "codegen-units=1",
     "-C", "panic=abort",
-    "-C", "target-cpu=x86-64",
-    "-C", "force-frame-pointers=no",
-    "-C", "link-self-contained=y",
-    "-C", "llvm-args=-inline-threshold=400",
+    "-C", "overflow-checks=off",
+    "-C", "debug-assertions=off",
     "-C", "debuginfo=0",
-    "-C", "debug-assertions=no",
-    "-C", "overflow-checks=no",
     "-C", "strip=symbols",
+    "-C", "embed-bitcode=yes",
+    "-C", "force-frame-pointers=no",
+    "-C", "llvm-args=-inline-threshold=400"
 ]
+
+[net]
+git-fetch-with-cli = true
