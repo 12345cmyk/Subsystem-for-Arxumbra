@@ -1,0 +1,44 @@
+cargo-features = ["unstable-editions"]
+
+[package]
+name = "Subsystem-for-Arxumbra"
+version = "5.0.0"
+edition = "future"
+
+[[bin]]
+name = "linux-subsystem-for-arxumbra"
+path = "src/main.rs"
+
+[dependencies]
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "keyboard",
+    "bevy_winit",
+    "wayland",
+    "bevy_render",
+    "bevy_input_focus",
+    "bevy_core_pipeline",
+    "bevy_asset",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "ktx2",
+    "basis-universal",
+    "zstd_rust",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+incremental = false
+overflow-checks = false
+debug-assertions = false
+
+[profile.release.package."*"]
+opt-level = 3
+codegen-units = 1
