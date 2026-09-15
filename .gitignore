@@ -1,4 +1,0 @@
-# Игнорируем конкретные файлы, которые нужно исключить
-Cargo.lock
-README.md
-rust-toolchain.toml
