@@ -1,9 +1,7 @@
-cargo-features = ["unstable-editions"]
-
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.3"
-edition = "future"
+version = "0.0.4"
+edition = "2024"
 
 [[bin]]
 name = "linux-subsystem-for-arxumbra"
@@ -15,7 +13,6 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "multi_threaded",
     "keyboard",
     "bevy_winit",
-    "wayland",
     "bevy_render",
     "bevy_input_focus",
     "bevy_core_pipeline",
@@ -28,12 +25,18 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "zstd_rust",
 ] }
 
+# Wayland-бэкенд — только для Linux (macOS: Metal, Windows: DX12 — без фич)
+[target.'cfg(target_os = "linux")'.dependencies]
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
+    "wayland",
+] }
+
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = "symbols"
+strip = "none"
 debug = false
 incremental = false
 overflow-checks = false
