@@ -8,6 +8,9 @@ name = "linux-subsystem-for-arxumbra"
 path = "src/main.rs"
 
 [dependencies]
+# Экстремально производительный аллокатор (замена системного malloc):
+# thread-local кэши + lock-free пути, статически линкуется (mi-malloc v3).
+mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
     "std",
     "multi_threaded",
