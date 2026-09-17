@@ -2,11 +2,14 @@ name: release
 
 # Автоматизация полного процесса сборки Subsystem-for-Arxumbra.
 # Порядок обязателен: Linux -> macOS -> Windows -> Release.
-#   Linux   : PGO + FAT LTO + BOLT (aggressive), smoke-тест.
+#   Linux   : PGO -> FAT LTO -> BOLT (aggressive), 3 сборки + 4 тренировочных прогона.
 #   macOS   : PGO + FAT LTO (BOLT поддерживает только Linux ELF).
 #   Windows : PGO + FAT LTO (MSVC), WARP DX12 best-effort.
 # Запуск: push тега v* (создаёт GitHub Release) или workflow_dispatch
 # (только артефакты, без релиза).
+#
+# ВАЖНО: cargo-pgo сам добавляет --release и --target <тройка хоста>,
+# поэтому бинари лежат в target/<triple>/release/, а не target/release/.
 
 on:
   push:
@@ -17,6 +20,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   BIN: linux-subsystem-for-arxumbra
+  LINUX_TRIPLE: x86_64-unknown-linux-gnu
+  MACOS_TRIPLE: aarch64-apple-darwin
+  WINDOWS_TRIPLE: x86_64-pc-windows-msvc
 
 permissions: {}
 
@@ -88,10 +94,10 @@ jobs:
           git apply tools/train-exit.patch
           grep -c "AppExit::Success" src/main.rs
 
-      - name: Instrumented build (PGO + BOLT)
-        run: cargo pgo bolt build --with-pgo -- --release --locked
+      - name: Stage 1 - instrumented build (PGO)
+        run: cargo pgo build -- --locked
 
-      - name: Training runs (2x)
+      - name: Stage 2 - PGO training runs (2x)
         run: |
           set -uo pipefail
           export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
@@ -100,30 +106,48 @@ jobs:
           export WGPU_BACKEND=vulkan
           export LLVM_PROFILE_FILE=target/pgo-profiles/train_%m_%p.profraw
           mkdir -p target/pgo-profiles
-          INSTR=target/release/$BIN-bolt-instrumented
+          INSTR=target/$LINUX_TRIPLE/release/$BIN
           ls -lh "$INSTR"
           for run in 1 2; do
-            echo "=== training run $run ==="
-            # Патч сам завершает бинарь через 75 c (AppExit::Success) -> чистый дамп профилей.
-            timeout 300 "./$INSTR" 2> /tmp/train$run.err || echo "run $run exit=$? (профили обычно всё равно собраны)"
-            tail -5 /tmp/train$run.err || true
+            echo "=== pgo training run $run ==="
+            # Патч сам завершает бинарь через 75 c (AppExit::Success) -> чистый дамп профиля.
+            timeout 300 "./$INSTR" 2> /tmp/trainp$run.err || echo "run $run exit=$? (профили обычно всё равно собраны)"
+            tail -5 /tmp/trainp$run.err || true
           done
-          echo "--- pgo-profiles:"; ls -lh target/pgo-profiles/ | head
-          echo "--- bolt-profiles:"; ls -lh target/bolt-profiles/$BIN/ | head
+          ls -lh target/pgo-profiles/ | head
+
+      - name: Stage 3 - instrumented build (PGO-use + BOLT)
+        run: cargo pgo bolt build --with-pgo -- --locked
+
+      - name: Stage 4 - BOLT training runs (2x)
+        run: |
+          set -uo pipefail
+          export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+          export WAYLAND_DISPLAY=arx-wayland
+          export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
+          export WGPU_BACKEND=vulkan
+          INSTR=target/$LINUX_TRIPLE/release/$BIN-bolt-instrumented
+          ls -lh "$INSTR"
+          for run in 1 2; do
+            echo "=== bolt training run $run ==="
+            timeout 300 "./$INSTR" 2> /tmp/trainb$run.err || echo "run $run exit=$? (профили обычно всё равно собраны)"
+            tail -5 /tmp/trainb$run.err || true
+          done
+          ls -lh target/bolt-profiles/$BIN/ | head
 
       - name: Restore pristine sources
         run: git checkout -- src/main.rs
 
-      - name: Final build (PGO + FAT LTO + BOLT aggressive)
+      - name: Stage 5 - final build (PGO + FAT LTO + BOLT aggressive)
         run: >-
           cargo pgo bolt optimize --with-pgo
           --bolt-args='-reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -icf=1 -jump-tables=aggressive -peepholes=all -sctc-mode=heuristic -dyno-stats'
-          -- --release --locked
+          -- --locked
 
       - name: Strip binary
         run: |
-          strip target/release/$BIN
-          ls -lh target/release/$BIN
+          strip target/$LINUX_TRIPLE/release/$BIN-bolt-optimized
+          ls -lh target/$LINUX_TRIPLE/release/$BIN-bolt-optimized
 
       - name: Smoke test
         run: |
@@ -131,10 +155,12 @@ jobs:
           export WAYLAND_DISPLAY=arx-wayland
           export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json
           export WGPU_BACKEND=vulkan
-          # Бинарь сам завершается кодом 0 (~8 c). Любой другой исход - провал.
-          timeout 20 ./target/release/$BIN 2> /tmp/smoke.err
+          FINAL=target/$LINUX_TRIPLE/release/$BIN-bolt-optimized
+          # Бинарь - обоина: без Esc он живёт вечно. PASS = выжил под timeout (124)
+          # или вышел сам (0), при ПУСТОМ stderr.
+          timeout 20 "./$FINAL" 2> /tmp/smoke.err
           code=$?
-          if [ $code -ne 0 ]; then
+          if [ $code -ne 0 ] && [ $code -ne 124 ]; then
             echo "smoke test FAILED, exit=$code"; cat /tmp/smoke.err; exit 1
           fi
           if [ -s /tmp/smoke.err ]; then
@@ -145,7 +171,7 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp target/release/$BIN dist/$BIN-linux-x86_64
+          cp target/$LINUX_TRIPLE/release/$BIN-bolt-optimized dist/$BIN-linux-x86_64
           chmod +x dist/$BIN-linux-x86_64
           tar czf dist/$BIN-linux-x86_64.tar.gz -C dist $BIN-linux-x86_64
           rm dist/$BIN-linux-x86_64
@@ -185,7 +211,7 @@ jobs:
           grep -c "AppExit::Success" src/main.rs
 
       - name: Instrumented build (PGO)
-        run: cargo pgo build -- --release --locked
+        run: cargo pgo build -- --locked
 
       - name: Training runs (2x, best-effort)
         run: |
@@ -200,11 +226,13 @@ jobs:
             kill "$wd" 2>/dev/null || true
             return $rc
           }
+          INSTR=target/$MACOS_TRIPLE/release/$BIN
+          ls -lh "$INSTR"
           for run in 1 2; do
             echo "=== training run $run ==="
             # У CI-раннера может не быть интерактивного дисплея: прогон best-effort,
             # профили собираются с того кода, что успел выполниться.
-            run_to 300 ./target/release/$BIN 2> /tmp/train$run.err \
+            run_to 300 "./$INSTR" 2> /tmp/train$run.err \
               || echo "run $run exit=$? (best-effort, продолжаем)"
             tail -5 /tmp/train$run.err || true
           done
@@ -214,12 +242,12 @@ jobs:
         run: git checkout -- src/main.rs
 
       - name: Final build (PGO + FAT LTO)
-        run: cargo pgo optimize build -- --release --locked
+        run: cargo pgo optimize build -- --locked
 
       - name: Strip binary
         run: |
-          strip target/release/$BIN
-          ls -lh target/release/$BIN
+          strip target/$MACOS_TRIPLE/release/$BIN
+          ls -lh target/$MACOS_TRIPLE/release/$BIN
 
       - name: Smoke test (best-effort)
         run: |
@@ -232,8 +260,8 @@ jobs:
             return $rc
           }
           rc=0
-          run_to 20 ./target/release/$BIN 2> /tmp/smoke.err || rc=$?
-          if [ $rc -ne 0 ] && [ $rc -ne 137 ]; then
+          run_to 20 ./target/$MACOS_TRIPLE/release/$BIN 2> /tmp/smoke.err || rc=$?
+          if [ $rc -ne 0 ] && [ $rc -ne 124 ] && [ $rc -ne 137 ]; then
             echo "ВНИМАНИЕ: бинарь завершился с кодом $rc (без дисплея на раннере это ожидаемо)"
             tail -5 /tmp/smoke.err || true
           else
@@ -243,7 +271,7 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp target/release/$BIN dist/$BIN-macos-aarch64
+          cp target/$MACOS_TRIPLE/release/$BIN dist/$BIN-macos-aarch64
           chmod +x dist/$BIN-macos-aarch64
           tar czf dist/$BIN-macos-aarch64.tar.gz -C dist $BIN-macos-aarch64
           rm dist/$BIN-macos-aarch64
@@ -287,7 +315,7 @@ jobs:
 
       - name: Instrumented build (PGO)
         shell: bash
-        run: cargo pgo build -- --release --locked
+        run: cargo pgo build -- --locked
 
       - name: Training runs (2x, best-effort через WARP DX12)
         shell: bash
@@ -304,11 +332,13 @@ jobs:
             kill "$wd" 2>/dev/null || true
             return $rc
           }
+          INSTR=target/$WINDOWS_TRIPLE/release/$BIN.exe
+          ls -lh "$INSTR"
           for run in 1 2; do
             echo "=== training run $run ==="
             # WARP (программный DX12) есть на раннерах; окно в сервисной сессии может не
             # создаться - прогон best-effort, профили собираются частично.
-            run_to 300 ./target/release/$BIN.exe 2> /tmp/train$run.err \
+            run_to 300 "./$INSTR" 2> /tmp/train$run.err \
               || echo "run $run exit=$? (best-effort, продолжаем)"
             tail -5 /tmp/train$run.err || true
           done
@@ -320,7 +350,7 @@ jobs:
 
       - name: Final build (PGO + FAT LTO)
         shell: bash
-        run: cargo pgo optimize build -- --release --locked
+        run: cargo pgo optimize build -- --locked
 
       - name: Smoke test (best-effort)
         shell: bash
@@ -335,8 +365,8 @@ jobs:
             return $rc
           }
           rc=0
-          run_to 20 ./target/release/$BIN.exe 2> /tmp/smoke.err || rc=$?
-          if [ $rc -ne 0 ] && [ $rc -ne 137 ]; then
+          run_to 20 ./target/$WINDOWS_TRIPLE/release/$BIN.exe 2> /tmp/smoke.err || rc=$?
+          if [ $rc -ne 0 ] && [ $rc -ne 124 ] && [ $rc -ne 137 ]; then
             echo "ВНИМАНИЕ: бинарь завершился с кодом $rc (без дисплея на раннере это ожидаемо)"
             tail -5 /tmp/smoke.err || true
           else
@@ -347,7 +377,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/$BIN.exe dist/$BIN-windows-x86_64.exe
+          cp target/$WINDOWS_TRIPLE/release/$BIN.exe dist/$BIN-windows-x86_64.exe
           ls -lh dist/
 
       - name: Upload artifact
