@@ -37,6 +37,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Preflight - полнота репозитория
+        run: |
+          missing=0
+          for f in Cargo.toml Cargo.lock src/main.rs assets/000.ktx2 assets/menu.ktx2 \
+                   rust-toolchain.toml .cargo/config.toml .gitattributes \
+                   .gitignore .github/workflows/release.yml tools/train-exit.patch README.md; do
+            [ -f "$f" ] || { echo "::error::ОТСУТСТВУЕТ $f"; missing=1; }
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo ""
+            echo "=================================================================="
+            echo "РЕПОЗИТОРИЙ ЗАГРУЖЕН НЕ ПОЛНОСТЬЮ (нужно 12 файлов, см. список выше)."
+            echo "Залейте ПОЛНОЕ содержимое архива arxumbra-v8.zip через git:"
+            echo "  unzip arxumbra-v8.zip && cd arxumbra-v8"
+            echo "  git init -b main && git add -A && git commit -m v8"
+            echo "  git remote add origin <ваш-репозиторий>.git && git push -f origin main"
+            echo "ВНИМАНИЕ: веб-загрузка файлов на github.com НЕ подходит —"
+            echo "assets/000.ktx2 (55 МБ) превышает лимит 25 МБ на файл."
+            echo "Готовый бинарь в git не входит (.gitignore: лимит GitHub 100 МБ)."
+            echo "=================================================================="
+            exit 1
+          fi
+          echo "Полный набор файлов (12/12): OK"
+
       - name: Install Rust toolchain
         run: |
           RUSTCHAIN=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
@@ -75,8 +99,8 @@ jobs:
           fi
           ls -l /usr/lib/libbolt_rt_instr.a
 
-      - name: Install weston + lavapipe (headless GPU)
-        run: sudo apt-get install -y weston mesa-vulkan-drivers
+      - name: Install weston + lavapipe (headless GPU) + wayland/xkb dev-пакеты
+        run: sudo apt-get install -y weston mesa-vulkan-drivers libwayland-dev libxkbcommon-dev pkg-config
 
       - name: Start headless weston
         run: |
@@ -195,6 +219,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Preflight - полнота репозитория
+        run: |
+          missing=0
+          for f in Cargo.toml Cargo.lock src/main.rs assets/000.ktx2 assets/menu.ktx2 \
+                   rust-toolchain.toml .cargo/config.toml .gitattributes \
+                   .gitignore .github/workflows/release.yml tools/train-exit.patch README.md; do
+            [ -f "$f" ] || { echo "::error::ОТСУТСТВУЕТ $f"; missing=1; }
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Репозиторий загружен не полностью - залейте ПОЛНОЕ содержимое arxumbra-v8.zip через git (не веб-загрузку)"
+            exit 1
+          fi
+          echo "Полный набор файлов (12/12): OK"
+
       - name: Install Rust toolchain
         run: |
           RUSTCHAIN=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
@@ -294,6 +332,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Preflight - полнота репозитория
+        shell: bash
+        run: |
+          missing=0
+          for f in Cargo.toml Cargo.lock src/main.rs assets/000.ktx2 assets/menu.ktx2 \
+                   rust-toolchain.toml .cargo/config.toml .gitattributes \
+                   .gitignore .github/workflows/release.yml tools/train-exit.patch README.md; do
+            [ -f "$f" ] || { echo "::error::ОТСУТСТВУЕТ $f"; missing=1; }
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Репозиторий загружен не полностью - залейте ПОЛНОЕ содержимое arxumbra-v8.zip через git (не веб-загрузку)"
+            exit 1
+          fi
+          echo "Полный набор файлов (12/12): OK"
 
       - name: Install Rust toolchain
         shell: bash
