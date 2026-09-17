@@ -6,8 +6,9 @@ static AL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
     let k = include_bytes!("../assets/000.ktx2");
+    let m = include_bytes!("../assets/menu.ktx2");
     let (ftx, frx) = std::sync::mpsc::channel::<bevy::image::CompressedImageFormats>();
-    let (itx, irx) = std::sync::mpsc::channel::<Result<bevy::image::Image, String>>();
+    let (itx, irx) = std::sync::mpsc::channel::<Result<(bevy::image::Image, bevy::image::Image), String>>();
     std::thread::spawn(move || {
         if let Ok(f) = frx.recv() {
             let _ = itx.send(
@@ -15,6 +16,12 @@ fn main() {
                     .map(|mut i| {
                         i.sampler = bevy::image::ImageSampler::linear();
                         i
+                    })
+                    .and_then(|i| {
+                        bevy::image::ktx2_buffer_to_image(m, f, true).map(|mut j| {
+                            j.sampler = bevy::image::ImageSampler::linear();
+                            (i, j)
+                        })
                     })
                     .map_err(|e| e.to_string()),
             );
@@ -97,13 +104,13 @@ fn main() {
               mut ws: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>,
               mut sf: bevy::ecs::system::Local<bool>,
               mut s: bevy::ecs::system::Local<Option<bevy::ecs::entity::Entity>>,
-              mut im: bevy::ecs::system::Local<(f32, f32)>,
+              mut im: bevy::ecs::system::Local<(f32, f32, Option<bevy::asset::Handle<bevy::image::Image>>)>,
               mut cam: bevy::ecs::system::Local<Option<bevy::ecs::entity::Entity>>,
               mut px: bevy::ecs::system::Local<(u32, u32)>,
               mut id: bevy::ecs::system::Local<Option<std::time::Instant>>,
               mut hd: bevy::ecs::system::Local<Option<std::time::Instant>>,
               mut mn: bevy::ecs::system::Local<Option<(bevy::ecs::entity::Entity, bevy::ecs::entity::Entity, bevy::ecs::entity::Entity)>>,
-              mut mc: bevy::ecs::system::Local<Option<std::time::Instant>>| {
+              mut ma: bevy::ecs::system::Local<(f32, Option<std::time::Instant>, f32, Option<std::time::Instant>)>| {
             let mut w = wq.single_mut().unwrap();
             if w.mode != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary) {
                 w.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
@@ -129,13 +136,13 @@ fn main() {
                             eprintln!("arxumbra: {e}");
                             c.write_message(bevy::app::AppExit::error());
                         }
-                        Ok(i) => {
-                            *im = (i.width() as f32, i.height() as f32);
-                            let h = ia.add(i);
+                        Ok((i, j)) => {
+                            *im = (i.width() as f32, i.height() as f32, Some(ia.add(j)));
+                            let hw = ia.add(i);
                             *s = Some(
                                 c.spawn((
                                     bevy::sprite::Sprite {
-                                        image: h,
+                                        image: hw,
                                         custom_size: Some(bevy::math::Vec2::new(im.0, im.1)),
                                         ..Default::default()
                                     },
@@ -183,10 +190,10 @@ fn main() {
                     c.entity(b).despawn();
                     c.entity(u).despawn();
                     *mn = None;
-                    *mc = None;
                 }
+                *ma = (0.0, None, 0.0, None);
                 ws.focused_mode = bevy::winit::UpdateMode::Continuous;
-            } else if cam.is_some() && mn.is_none() && mc.is_none() {
+            } else if cam.is_some() && mn.is_none() && ma.3.is_none() {
                 if id.is_none() {
                     *id = Some(std::time::Instant::now());
                 }
@@ -198,15 +205,10 @@ fn main() {
                     }
                 }
             }
-            if k.just_pressed(bevy::input::keyboard::KeyCode::F11) {
-                if let Some((p, b, u)) = *mn {
-                    c.entity(p).despawn();
-                    c.entity(b).despawn();
-                    c.entity(u).despawn();
-                    *mn = None;
-                    *mc = Some(std::time::Instant::now());
-                } else {
-                    *mc = None;
+            if k.just_pressed(bevy::input::keyboard::KeyCode::F1) {
+                if mn.is_some() {
+                    *ma = (ma.0, Some(std::time::Instant::now()), if ma.2 < 0.0 { 1.0 } else { -1.0 }, None);
+                } else if im.2.is_some() {
                     if cam.is_none() {
                         *cam = Some(
                             c.spawn((
@@ -224,46 +226,73 @@ fn main() {
                     let sw = (0.0035 * ww as f32).max(3.0);
                     let pw = (0.0018 * ww as f32).max(2.0);
                     let mx = -(ww as f32) / 2.0 + mw / 2.0;
+                    let dx = mx - mw * 1.05;
                     *mn = Some((
-                        c.spawn((
-                            bevy::sprite::Sprite::from_color(
-                                bevy::color::Color::srgba(0.102, 0.106, 0.149, 0.86),
-                                bevy::math::Vec2::new(mw, wh as f32),
-                            ),
-                            bevy::transform::components::Transform::from_xyz(mx, 0.0, 1.0),
-                        ))
-                        .id(),
-                        c.spawn((
-                            bevy::sprite::Sprite::from_color(
-                                bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92),
-                                bevy::math::Vec2::new(sw, wh as f32),
-                            ),
-                            bevy::transform::components::Transform::from_xyz(
-                                mx + mw / 2.0 - sw / 2.0,
-                                0.0,
-                                2.0,
-                            ),
-                        ))
-                        .id(),
-                        c.spawn((
-                            bevy::sprite::Sprite::from_color(
-                                bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75),
-                                bevy::math::Vec2::new(pw, wh as f32),
-                            ),
-                            bevy::transform::components::Transform::from_xyz(
-                                mx + mw / 2.0 - sw - 10.0 - pw / 2.0,
-                                0.0,
-                                2.0,
-                            ),
-                        ))
-                        .id(),
+                        c.spawn(bevy::transform::components::Transform::from_xyz(dx, 0.0, 1.0)).id(),
+                        c.spawn(bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw / 2.0, 0.0, 2.0)).id(),
+                        c.spawn(bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw - 10.0 - pw / 2.0, 0.0, 2.0)).id(),
                     ));
+                    *ma = (0.0, Some(std::time::Instant::now()), 1.0, None);
                     ws.focused_mode = bevy::winit::UpdateMode::Continuous;
                 }
             }
-            if let Some(at) = *mc {
-                if mn.is_none() && at.elapsed() >= std::time::Duration::from_millis(250) {
-                    *mc = None;
+            if mn.is_some() && ma.2 != 0.0 {
+                let now = std::time::Instant::now();
+                let dt = ma.1.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
+                ma.1 = Some(now);
+                ma.0 = if ma.2 > 0.0 {
+                    (ma.0 + dt / 0.25).min(1.0)
+                } else {
+                    (ma.0 - dt / 0.25).max(0.0)
+                };
+                if (ma.2 > 0.0 && ma.0 == 1.0) || (ma.2 < 0.0 && ma.0 == 0.0) {
+                    ma.2 = 0.0;
+                }
+                let sp = ma.0 * ma.0 * (3.0 - 2.0 * ma.0);
+                let mw = 0.21 * ww as f32;
+                let whf = wh as f32;
+                let sw = (0.0035 * ww as f32).max(3.0);
+                let pw = (0.0018 * ww as f32).max(2.0);
+                let mx = -(ww as f32) / 2.0 + mw / 2.0;
+                let dx = mx - (1.0 - sp) * mw * 1.05;
+                if let (Some((p, b, u)), Some(mh)) = (*mn, im.2.clone()) {
+                    c.entity(p).insert((
+                        bevy::sprite::Sprite {
+                            image: mh,
+                            custom_size: Some(bevy::math::Vec2::new(mw, whf)),
+                            color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.86 * sp),
+                            ..Default::default()
+                        },
+                        bevy::transform::components::Transform::from_xyz(dx, 0.0, 1.0),
+                    ));
+                    c.entity(b).insert((
+                        bevy::sprite::Sprite::from_color(
+                            bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92 * sp),
+                            bevy::math::Vec2::new(sw, whf),
+                        ),
+                        bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw / 2.0, 0.0, 2.0),
+                    ));
+                    c.entity(u).insert((
+                        bevy::sprite::Sprite::from_color(
+                            bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75 * sp),
+                            bevy::math::Vec2::new(pw, whf),
+                        ),
+                        bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw - 10.0 - pw / 2.0, 0.0, 2.0),
+                    ));
+                }
+                if ma.0 == 0.0 && ma.2 == 0.0 {
+                    if let Some((p, b, u)) = *mn {
+                        c.entity(p).despawn();
+                        c.entity(b).despawn();
+                        c.entity(u).despawn();
+                    }
+                    *mn = None;
+                    *ma = (0.0, None, 0.0, Some(std::time::Instant::now()));
+                }
+            }
+            if let Some(at) = ma.3 {
+                if at.elapsed() >= std::time::Duration::from_millis(250) {
+                    *ma = (0.0, None, 0.0, None);
                     if cam.is_some() {
                         c.entity(cam.take().unwrap()).despawn();
                     }
