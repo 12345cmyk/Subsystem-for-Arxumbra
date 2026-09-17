@@ -1,6 +1,6 @@
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.4"
+version = "8.0.0"
 edition = "2024"
 
 [[bin]]
@@ -8,8 +8,6 @@ name = "linux-subsystem-for-arxumbra"
 path = "src/main.rs"
 
 [dependencies]
-# Экстремально производительный аллокатор (замена системного malloc):
-# thread-local кэши + lock-free пути, статически линкуется (mi-malloc v3).
 mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
     "std",
@@ -28,7 +26,6 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "zstd_rust",
 ] }
 
-# Wayland-бэкенд — только для Linux (macOS: Metal, Windows: DX12 — без фич)
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
     "wayland",
