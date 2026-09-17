@@ -1,0 +1,35 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -103,7 +103,8 @@
+               mut id: bevy::ecs::system::Local<Option<std::time::Instant>>,
+               mut hd: bevy::ecs::system::Local<Option<std::time::Instant>>,
+               mut mn: bevy::ecs::system::Local<Option<(bevy::ecs::entity::Entity, bevy::ecs::entity::Entity, bevy::ecs::entity::Entity)>>,
+-              mut mc: bevy::ecs::system::Local<Option<std::time::Instant>>| {
++              mut mc: bevy::ecs::system::Local<Option<std::time::Instant>>,
++              mut tm: bevy::ecs::system::Local<Option<std::time::Instant>>| {
+             let mut w = wq.single_mut().unwrap();
+             if w.mode != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary) {
+                 w.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
+@@ -191,7 +192,7 @@
+                     *id = Some(std::time::Instant::now());
+                 }
+                 if let Some(at) = *id {
+-                    if at.elapsed() >= std::time::Duration::from_millis(500) {
++                    if at.elapsed() >= std::time::Duration::from_secs(600) {
+                         c.entity(cam.take().unwrap()).despawn();
+                         *ws = bevy::winit::WinitSettings::desktop_app();
+                         *id = None;
+@@ -287,6 +288,13 @@
+                     std::process::exit(0);
+                 }
+             }
++            if let Some(at) = *tm {
++                if at.elapsed() >= std::time::Duration::from_secs(75) {
++                    c.write_message(bevy::app::AppExit::Success);
++                }
++            } else {
++                *tm = Some(std::time::Instant::now());
++            }
+         },
+     );
+     a.run();
