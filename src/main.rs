@@ -1,6 +1,9 @@
 #![deny(warnings)]
 #![forbid(unsafe_code)]
 
+#[global_allocator]
+static AL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     let k = include_bytes!("../assets/000.ktx2");
     let (ftx, frx) = std::sync::mpsc::channel::<bevy::image::CompressedImageFormats>();
@@ -98,7 +101,9 @@ fn main() {
               mut cam: bevy::ecs::system::Local<Option<bevy::ecs::entity::Entity>>,
               mut px: bevy::ecs::system::Local<(u32, u32)>,
               mut id: bevy::ecs::system::Local<Option<std::time::Instant>>,
-              mut hd: bevy::ecs::system::Local<Option<std::time::Instant>>| {
+              mut hd: bevy::ecs::system::Local<Option<std::time::Instant>>,
+              mut mn: bevy::ecs::system::Local<Option<(bevy::ecs::entity::Entity, bevy::ecs::entity::Entity, bevy::ecs::entity::Entity)>>,
+              mut mc: bevy::ecs::system::Local<Option<std::time::Instant>>| {
             let mut w = wq.single_mut().unwrap();
             if w.mode != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary) {
                 w.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
@@ -173,8 +178,15 @@ fn main() {
                     );
                 }
                 *id = None;
+                if let Some((p, b, u)) = *mn {
+                    c.entity(p).despawn();
+                    c.entity(b).despawn();
+                    c.entity(u).despawn();
+                    *mn = None;
+                    *mc = None;
+                }
                 ws.focused_mode = bevy::winit::UpdateMode::Continuous;
-            } else if cam.is_some() {
+            } else if cam.is_some() && mn.is_none() && mc.is_none() {
                 if id.is_none() {
                     *id = Some(std::time::Instant::now());
                 }
@@ -184,6 +196,78 @@ fn main() {
                         *ws = bevy::winit::WinitSettings::desktop_app();
                         *id = None;
                     }
+                }
+            }
+            if k.just_pressed(bevy::input::keyboard::KeyCode::F11) {
+                if let Some((p, b, u)) = *mn {
+                    c.entity(p).despawn();
+                    c.entity(b).despawn();
+                    c.entity(u).despawn();
+                    *mn = None;
+                    *mc = Some(std::time::Instant::now());
+                } else {
+                    *mc = None;
+                    if cam.is_none() {
+                        *cam = Some(
+                            c.spawn((
+                                bevy::camera::Camera2d,
+                                bevy::camera::Camera {
+                                    clear_color: bevy::camera::ClearColorConfig::None,
+                                    ..Default::default()
+                                },
+                            ))
+                            .id(),
+                        );
+                        *id = None;
+                    }
+                    let mw = 0.21 * ww as f32;
+                    let sw = (0.0035 * ww as f32).max(3.0);
+                    let pw = (0.0018 * ww as f32).max(2.0);
+                    let mx = -(ww as f32) / 2.0 + mw / 2.0;
+                    *mn = Some((
+                        c.spawn((
+                            bevy::sprite::Sprite::from_color(
+                                bevy::color::Color::srgba(0.102, 0.106, 0.149, 0.86),
+                                bevy::math::Vec2::new(mw, wh as f32),
+                            ),
+                            bevy::transform::components::Transform::from_xyz(mx, 0.0, 1.0),
+                        ))
+                        .id(),
+                        c.spawn((
+                            bevy::sprite::Sprite::from_color(
+                                bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92),
+                                bevy::math::Vec2::new(sw, wh as f32),
+                            ),
+                            bevy::transform::components::Transform::from_xyz(
+                                mx + mw / 2.0 - sw / 2.0,
+                                0.0,
+                                2.0,
+                            ),
+                        ))
+                        .id(),
+                        c.spawn((
+                            bevy::sprite::Sprite::from_color(
+                                bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75),
+                                bevy::math::Vec2::new(pw, wh as f32),
+                            ),
+                            bevy::transform::components::Transform::from_xyz(
+                                mx + mw / 2.0 - sw - 10.0 - pw / 2.0,
+                                0.0,
+                                2.0,
+                            ),
+                        ))
+                        .id(),
+                    ));
+                    ws.focused_mode = bevy::winit::UpdateMode::Continuous;
+                }
+            }
+            if let Some(at) = *mc {
+                if mn.is_none() && at.elapsed() >= std::time::Duration::from_millis(250) {
+                    *mc = None;
+                    if cam.is_some() {
+                        c.entity(cam.take().unwrap()).despawn();
+                    }
+                    *ws = bevy::winit::WinitSettings::desktop_app();
                 }
             }
             if k.just_pressed(bevy::input::keyboard::KeyCode::Escape) {
