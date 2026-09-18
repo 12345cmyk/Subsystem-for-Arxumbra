@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Subsystem-for-Arxumbra"
-version = "8.0.0"
+version = "9.0.0"
 dependencies = [
  "bevy",
  "mimalloc",
