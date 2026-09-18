@@ -110,7 +110,7 @@ git push -u origin main
 git tag v9.0.0 && git push origin v9.0.0    # <- запускает CI и создаёт Release
 ```
 
-Проверка перед push: `git ls-files | wc -l` → **12 файлов** (сам бинарь
+Проверка перед push: `git ls-files | wc -l` → **13 файлов** (сам бинарь
 остаётся рядом на диске, но в git не попадает).
 
 ### Если CI упал на шаге Preflight
@@ -123,13 +123,13 @@ git tag v9.0.0 && git push origin v9.0.0    # <- запускает CI и соз
   скрытые каталоги `.cargo/`, `.github/`. Заливайте только через git-клиент.
 - Частичная распаковка архива. Распакуйте заново и сравните: в каталоге arxumbra-v9/
   12 позиций (5 каталогов + 6 файлов репозитория + бинарь `.xz`),
-  `git ls-files | wc -l` = 12.
+  `git ls-files | wc -l` = 13 (в `tools/` два файла: патч и check-elf-layout.py).
 - **Старый коммит в истории (v7/v8)**: если репозиторий уже существует,
   скопируйте полное дерево из v9-архива поверх и сделайте новый коммит:
   `cp -r arxumbra-v9/. ваш-репозиторий/ && git add -A && git commit -m "v9 tree"`
   — **включая `tools/train-exit.patch`** (старый v7-патч в репо ломал CI).
 
-Preflight-шаг CI проверяет все 12 обязательных файлов до начала сборки,
+Preflight-шаг CI проверяет все 13 обязательных файлов до начала сборки,
 печатает, чего именно не хватает, и дополнительно проверяет, что
 `tools/train-exit.patch` применяется к текущему `src/main.rs` на чистом
 дереве (`git apply --check` перед началом сборки — старый патч от v7 больше
@@ -141,7 +141,7 @@ release.
 
 | # | job | раннер | конвейер |
 |---|-----|--------|----------|
-| 1 | `linux` | ubuntu-24.04 | weston+lavapipe+wayland-dev → 3 сборки + 4 тренировки (с автонажатием F1) → PGO+FAT LTO+BOLT aggressive → strip → smoke |
+| 1 | `linux` | ubuntu-24.04 | weston+lavapipe+wayland-dev → 3 сборки + 4 тренировки (с автонажатием F1) → PGO+FAT LTO+BOLT aggressive → проверка ELF-лейаута + smoke 12 c → llvm-strip-20 (с проверкой, fallback без strip) → smoke 25 c |
 | 2 | `macos` | macos-14 (M1) | PGO-инструментирование → 2 прогона (best-effort) → PGO+FAT LTO → strip |
 | 3 | `windows` | windows-latest (MSVC) | PGO → 2 прогона через WARP DX12 (best-effort) → PGO+FAT LTO |
 | 4 | `release` | ubuntu-latest | 3 артефакта + `SHA256SUMS.txt` → GitHub Release |
@@ -151,7 +151,12 @@ release.
 пути меню; `.gitattributes` (`* -text`) против CRLF-поломки `git apply` на
 Windows; BOLT на ubuntu ставится как `bolt-18` c симлинками
 `llvm-bolt`/`merge-fdata`/`libbolt_rt_instr.a`; tar.gz-артефакты сохраняют
-exec-бит.
+exec-бит; стрип BOLT-бинаря делает **только `llvm-strip-20`** (пакет
+`llvm-20-tools`) с последующей проверкой лейаута — GNU binutils `strip`
+(≤ 2.43) ломает BOLT-оптимизированные бинари: печатает
+`section ... can't be allocated in segment`, выходит с кодом 0, но
+перезаписывает файл сломанным сегментным лейаутом → SIGSEGV на старте
+(llvm/llvm-project#56738, #89336; исправлено в llvm-strip 19.1+).
 
 **Linux-зависимости сборки**: `libwayland-dev libxkbcommon-dev pkg-config` +
 `weston mesa-vulkan-drivers` (тренировки) + `bolt-18` (Ubuntu 24.04) /
@@ -191,13 +196,19 @@ git checkout -- src/main.rs
 cargo pgo bolt optimize --with-pgo \
   --bolt-args='-reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -icf=1 -jump-tables=aggressive -peepholes=all -sctc-mode=heuristic -dyno-stats' \
   -- --locked
-strip target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-optimized
+BIN=target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-optimized
+python3 tools/check-elf-layout.py "$BIN" && timeout 12 "$BIN"   # лейаут + smoke до strip
+llvm-strip-20 -o "$BIN.stripped" "$BIN" \
+  && python3 tools/check-elf-layout.py "$BIN.stripped" \
+  && mv -f "$BIN.stripped" "$BIN"                                # иначе — без strip
 ```
 
 Детали конвейера — как в v8 (cargo-pgo добавляет `--release` и `--target`
 сам, cargo-аргументы типа `--locked` — только после `--`; профили пишутся
 только при чистом exit; `strip = "none"` в профиле, стрип — последний шаг;
-FAT-LTO линк ест ~10 ГБ памяти).
+FAT-LTO линк ест ~10 ГБ памяти). Стрип — только `llvm-strip-20` с
+проверкой `tools/check-elf-layout.py` (см. раздел 3: GNU strip ломает
+BOLT-бинари); при проблемах бинарь отдаётся без strip.
 
 ## 6. Валидация v9 (weston headless + lavapipe, E2E-трейс WAYLAND_DEBUG)
 
