@@ -1,16 +1,52 @@
+diff --git a/src/main.rs b/src/main.rs
+index 8904d3a..cc90c2e 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -103,7 +103,8 @@
+@@ -99,7 +99,7 @@ fn main() {
+         move |mut c: bevy::ecs::system::Commands,
+               mut wq: bevy::ecs::system::Query<&mut bevy::window::Window>,
+               mut ia: bevy::ecs::system::ResMut<bevy::asset::Assets<bevy::image::Image>>,
+-              k: bevy::ecs::system::Res<bevy::input::ButtonInput<bevy::input::keyboard::KeyCode>>,
++              mut k: bevy::ecs::system::ResMut<bevy::input::ButtonInput<bevy::input::keyboard::KeyCode>>,
+               fs: Option<bevy::ecs::system::Res<bevy::image::CompressedImageFormatSupport>>,
+               mut ws: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>,
+               mut sf: bevy::ecs::system::Local<bool>,
+@@ -110,7 +110,8 @@ fn main() {
                mut id: bevy::ecs::system::Local<Option<std::time::Instant>>,
                mut hd: bevy::ecs::system::Local<Option<std::time::Instant>>,
                mut mn: bevy::ecs::system::Local<Option<(bevy::ecs::entity::Entity, bevy::ecs::entity::Entity, bevy::ecs::entity::Entity)>>,
--              mut mc: bevy::ecs::system::Local<Option<std::time::Instant>>| {
-+              mut mc: bevy::ecs::system::Local<Option<std::time::Instant>>,
-+              mut tm: bevy::ecs::system::Local<Option<std::time::Instant>>| {
+-              mut ma: bevy::ecs::system::Local<(f32, Option<std::time::Instant>, f32, Option<std::time::Instant>)>| {
++              mut ma: bevy::ecs::system::Local<(f32, Option<std::time::Instant>, f32, Option<std::time::Instant>)>,
++              mut tm: bevy::ecs::system::Local<(u8, Option<std::time::Instant>)>| {
              let mut w = wq.single_mut().unwrap();
              if w.mode != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary) {
                  w.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
-@@ -191,7 +192,7 @@
+@@ -123,6 +124,24 @@ fn main() {
+             }
+             let ww = w.physical_width();
+             let wh = w.physical_height();
++            if tm.1.is_none() {
++                tm.1 = Some(std::time::Instant::now());
++            }
++            let st = tm.0;
++            let sa = tm.1.unwrap().elapsed().as_secs_f32();
++            if st == 0 && sa >= 30.0 && im.2.is_some() && mn.is_none() && ma.3.is_none() {
++                k.release(bevy::input::keyboard::KeyCode::F1);
++                k.press(bevy::input::keyboard::KeyCode::F1);
++                *tm = (1, Some(std::time::Instant::now()));
++            } else if st == 1 && sa >= 18.0 && mn.is_some() && ma.2 == 0.0 {
++                k.release(bevy::input::keyboard::KeyCode::F1);
++                k.press(bevy::input::keyboard::KeyCode::F1);
++                *tm = (2, Some(std::time::Instant::now()));
++            } else if st == 2 && sa >= 27.0 {
++                c.write_message(bevy::app::AppExit::Success);
++            } else if sa >= 90.0 {
++                c.write_message(bevy::app::AppExit::error());
++            }
+             if !*sf {
+                 if let Some(f) = fs.as_deref() {
+                     let _ = q.lock().map(|t| t.send(f.0));
+@@ -198,7 +217,7 @@ fn main() {
                      *id = Some(std::time::Instant::now());
                  }
                  if let Some(at) = *id {
@@ -19,17 +55,3 @@
                          c.entity(cam.take().unwrap()).despawn();
                          *ws = bevy::winit::WinitSettings::desktop_app();
                          *id = None;
-@@ -287,6 +288,13 @@
-                     std::process::exit(0);
-                 }
-             }
-+            if let Some(at) = *tm {
-+                if at.elapsed() >= std::time::Duration::from_secs(75) {
-+                    c.write_message(bevy::app::AppExit::Success);
-+                }
-+            } else {
-+                *tm = Some(std::time::Instant::now());
-+            }
-         },
-     );
-     a.run();
