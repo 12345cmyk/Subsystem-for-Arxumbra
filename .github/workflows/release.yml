@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  BIN: linux-subsystem-for-arxumbra
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
@@ -16,119 +19,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Preflight — 12 обязательных файлов + применимость train-патча
+      - name: Rust toolchain
         run: |
-          set -euo pipefail
-          missing=0
-          for f in \
-            src/main.rs \
-            Cargo.toml \
-            Cargo.lock \
-            rust-toolchain.toml \
-            .cargo/config.toml \
-            .github/workflows/release.yml \
-            .gitattributes \
-            .gitignore \
-            README.md \
-            tools/train-exit.patch \
-            assets/000.ktx2 \
-            assets/menu.ktx2
-          do
-            if [ ! -f "$f" ]; then
-              echo "::error::Отсутствует обязательный файл: $f"
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::Репозиторий загружен не полностью (см. README, раздел 3). Заливайте через git-клиент, не через веб-загрузку."
-            exit 1
-          fi
-          git apply --check tools/train-exit.patch
-          echo "Preflight OK: 12 позиций, train-патч применяется к чистому main.rs (v9)"
+          rustup toolchain install nightly-2026-09-13 --profile minimal
+          rustup default nightly-2026-09-13
 
-      - name: Rust toolchain (nightly из rust-toolchain.toml)
-        run: rustup toolchain install nightly-2026-09-13 --profile minimal
-
-      - name: Зависимости сборки (wayland) + тренировки (weston, lavapipe)
+      - name: Build dependencies (wayland) + smoke dependencies (weston, lavapipe)
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers
 
-      - name: BOLT (bolt-18, fallback через llvm.sh)
-        run: |
-          set -euxo pipefail
-          if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y bolt-18; then
-            curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- 18
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y bolt-18
-          fi
-          sudo ln -sf /usr/bin/llvm-bolt-18 /usr/local/bin/llvm-bolt
-          sudo ln -sf /usr/bin/merge-fdata-18 /usr/local/bin/merge-fdata
-          BOLT_RT=$(find /usr/lib/llvm-18 -name libbolt_rt_instr.a | head -1)
-          sudo ln -sf "$BOLT_RT" /usr/lib/libbolt_rt_instr.a
-          sudo ln -sf "$BOLT_RT" /usr/local/lib/libbolt_rt_instr.a
-          llvm-bolt --version
-
-      - name: cargo-pgo
-        run: cargo install cargo-pgo --version 0.3.0 --locked
-
-      - name: Train-патч (самовыход 75 c + два автонажатия F1)
-        run: git apply tools/train-exit.patch
-
-      - name: PGO-инструментированная сборка
-        run: cargo pgo build -- --locked
-
-      - name: weston headless + lavapipe
-        run: |
-          export XDG_RUNTIME_DIR=$(mktemp -d)
-          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
-          weston --backend=headless-backend.so --socket=arx-wayland --idle-time=0 &
-          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-wayland" ] && break; sleep 1; done
-          [ -e "$XDG_RUNTIME_DIR/arx-wayland" ]
-          echo "WAYLAND_DISPLAY=arx-wayland" >> "$GITHUB_ENV"
-          echo "VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)" >> "$GITHUB_ENV"
-          echo "WGPU_BACKEND=vulkan" >> "$GITHUB_ENV"
-          echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
-
-      - name: 4 тренировочных прогона (75 c, автонажатия F1 в патче)
-        run: |
-          export LLVM_PROFILE_FILE=target/pgo-profiles/train_%m_%p.profraw
-          BIN=target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra
-          for i in 1 2 3 4; do
-            echo "--- train $i ---"
-            timeout 240 "$BIN" || echo "train $i: exit=$?"
-          done
-          ls -la target/pgo-profiles/ | head
-
-      - name: BOLT-инструментированная сборка (с PGO)
-        run: cargo pgo bolt build --with-pgo -- --locked
-
-      - name: 2 BOLT-тренировки
-        run: |
-          BIN=target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-instrumented
-          for i in 1 2; do
-            echo "--- bolt train $i ---"
-            timeout 240 "$BIN" || echo "bolt train $i: exit=$?"
-          done
-          ls target/bolt-profiles/linux-subsystem-for-arxumbra/ | head
-
-      - name: Восстановление main.rs + BOLT-оптимизация
-        run: |
-          git checkout -- src/main.rs
-          cargo pgo bolt optimize --with-pgo \
-            --bolt-args='-reorder-blocks=ext-tsp -reorder-functions=hfsort+ -split-functions -split-all-cold -icf=1 -jump-tables=aggressive -peepholes=all -sctc-mode=heuristic -dyno-stats' \
-            -- --locked
-
-      - name: strip
-        run: |
-          strip target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-optimized
-          ls -la target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-optimized
+      - name: Build (FAT LTO, strip)
+        run: cargo build --release --locked
 
       - name: Smoke (25 c, пустой stderr = обе текстуры декодированы)
         run: |
-          BIN=target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-optimized
-          timeout 25 "$BIN" 2>/tmp/smoke.err || true
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          weston --backend=headless-backend.so --socket=arx-smoke --idle-time=0 &
+          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-smoke" ] && break; sleep 1; done
+          [ -e "$XDG_RUNTIME_DIR/arx-smoke" ] || { echo "::error::weston не поднялся"; exit 1; }
+          export WAYLAND_DISPLAY=arx-smoke
+          export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          export WGPU_BACKEND=vulkan
+          timeout 25 target/release/$BIN 2>/tmp/smoke.err || true
           if [ -s /tmp/smoke.err ]; then
             echo "::error::Smoke-прогон написал в stderr:"
             cat /tmp/smoke.err
@@ -136,156 +51,30 @@ jobs:
           fi
           echo "Smoke OK: stderr пуст"
 
-      - name: Артефакт (tar.gz, exec-бит сохраняется)
+      - name: Artifact
         run: |
-          mkdir -p dist
-          cp target/x86_64-unknown-linux-gnu/release/linux-subsystem-for-arxumbra-bolt-optimized \
-             dist/linux-subsystem-for-arxumbra-linux-x86_64
-          tar czf dist/linux-subsystem-for-arxumbra-linux-x86_64.tar.gz -C dist \
-              linux-subsystem-for-arxumbra-linux-x86_64
-          rm dist/linux-subsystem-for-arxumbra-linux-x86_64
+          mkdir dist
+          cp target/release/$BIN dist/$BIN
+          tar czf dist/$BIN-linux-x86_64.tar.gz -C dist $BIN
+          rm dist/$BIN
+          sha256sum dist/$BIN-linux-x86_64.tar.gz > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
-          path: dist/linux-subsystem-for-arxumbra-linux-x86_64.tar.gz
-
-  macos:
-    needs: linux
-    runs-on: macos-14
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Preflight
-        run: |
-          set -euo pipefail
-          for f in src/main.rs Cargo.toml Cargo.lock rust-toolchain.toml \
-                   .cargo/config.toml tools/train-exit.patch assets/000.ktx2 assets/menu.ktx2; do
-            [ -f "$f" ] || { echo "::error::Отсутствует $f"; exit 1; }
-          done
-
-      - name: Rust toolchain
-        run: rustup toolchain install nightly-2026-09-13 --profile minimal
-
-      - name: cargo-pgo
-        run: cargo install cargo-pgo --version 0.3.0 --locked
-
-      - name: Train-патч
-        run: git apply tools/train-exit.patch
-
-      - name: PGO-инструментированная сборка
-        run: cargo pgo build -- --locked
-
-      - name: 2 тренировочных прогона (best-effort, без дисплея)
-        run: |
-          export LLVM_PROFILE_FILE=target/pgo-profiles/train_%m_%p.profraw
-          BIN=target/aarch64-apple-darwin/release/linux-subsystem-for-arxumbra
-          for i in 1 2; do
-            timeout 240 "$BIN" || echo "train $i: exit=$? (best-effort)"
-          done
-
-      - name: Восстановление main.rs + PGO-оптимизация
-        run: |
-          git checkout -- src/main.rs
-          cargo pgo optimize -- --locked
-
-      - name: strip
-        run: |
-          strip target/aarch64-apple-darwin/release/linux-subsystem-for-arxumbra
-          ls -la target/aarch64-apple-darwin/release/linux-subsystem-for-arxumbra
-
-      - name: Артефакт
-        run: |
-          mkdir -p dist
-          cp target/aarch64-apple-darwin/release/linux-subsystem-for-arxumbra \
-             dist/linux-subsystem-for-arxumbra-macos-aarch64
-          tar czf dist/linux-subsystem-for-arxumbra-macos-aarch64.tar.gz -C dist \
-              linux-subsystem-for-arxumbra-macos-aarch64
-          rm dist/linux-subsystem-for-arxumbra-macos-aarch64
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-aarch64
-          path: dist/linux-subsystem-for-arxumbra-macos-aarch64.tar.gz
-
-  windows:
-    needs: macos
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in src/main.rs Cargo.toml Cargo.lock rust-toolchain.toml \
-                   .cargo/config.toml tools/train-exit.patch assets/000.ktx2 assets/menu.ktx2; do
-            [ -f "$f" ] || { echo "::error::missing $f"; exit 1; }
-          done
-
-      - name: Rust toolchain
-        run: rustup toolchain install nightly-2026-09-13 --profile minimal
-
-      - name: cargo-pgo
-        run: cargo install cargo-pgo --version 0.3.0 --locked
-
-      - name: Train-патч
-        shell: bash
-        run: git apply tools/train-exit.patch
-
-      - name: PGO-инструментированная сборка
-        run: cargo pgo build -- --locked
-
-      - name: 2 тренировочных прогона (WARP DX12, best-effort)
-        shell: bash
-        run: |
-          export LLVM_PROFILE_FILE="target/pgo-profiles/train_%m_%p.profraw"
-          export WGPU_BACKEND=dx12
-          BIN=target/x86_64-pc-windows-msvc/release/linux-subsystem-for-arxumbra.exe
-          for i in 1 2; do
-            timeout 240 "$BIN" || echo "train $i: exit=$? (best-effort)"
-          done
-
-      - name: Восстановление main.rs + PGO-оптимизация
-        shell: bash
-        run: |
-          git checkout -- src/main.rs
-          cargo pgo optimize -- --locked
-
-      - name: Артефакт
-        shell: bash
-        run: |
-          mkdir -p dist
-          cp target/x86_64-pc-windows-msvc/release/linux-subsystem-for-arxumbra.exe dist/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-x86_64
-          path: dist/linux-subsystem-for-arxumbra.exe
+          path: dist/*
 
   release:
-    needs: [linux, macos, windows]
+    needs: linux
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           path: dist
 
-      - name: SHA256SUMS
-        run: |
-          cd dist
-          find . -type f \( -name '*.tar.gz' -o -name '*.exe' \) -exec mv {} . \;
-          rmdir --ignore-fail-on-non-empty */ 2>/dev/null || true
-          sha256sum linux-subsystem-for-arxumbra-* > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/linux-subsystem-for-arxumbra-*
+          files: dist/linux-x86_64/*
           generate_release_notes: true
