@@ -25,7 +25,8 @@ use bevy::render::RenderPlugin;
 use bevy::sprite::{Sprite, SpritePlugin};
 use bevy::sprite_render::SpriteRenderPlugin;
 use bevy::time::TimePlugin;
-use bevy::transform::{Transform, TransformPlugin};
+use bevy::transform::components::Transform;
+use bevy::transform::TransformPlugin;
 use bevy::window::{
     ExitCondition, MonitorSelection, PresentMode, Window, WindowMode, WindowPlugin,
 };
