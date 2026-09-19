@@ -136,6 +136,7 @@ fn frame(
     mut winit: ResMut<WinitSettings>,
     mut app: Local<Runtime>,
 ) {
+    let app = &mut *app;
     let now = Instant::now();
     let mut window = windows.single_mut().expect("primary window");
 
