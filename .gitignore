@@ -1,9 +1,3 @@
 /target
-*.profraw
-*.fdata*
-*.profdata
-# Готовый бинарь в git не входит: лимит GitHub 100 МБ на файл (бинарь ~103 МБ).
-# CI собирает бинари сам; локальный бинарь остаётся рядом с исходниками.
-# .xz-копия (для архива) тоже исключена из git.
 /linux-subsystem-for-arxumbra
 /linux-subsystem-for-arxumbra.xz

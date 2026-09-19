@@ -2,321 +2,426 @@
 #![forbid(unsafe_code)]
 
 #[global_allocator]
-static AL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
-    let k = include_bytes!("../assets/000.ktx2");
-    let m = include_bytes!("../assets/menu.ktx2");
-    let (ftx, frx) = std::sync::mpsc::channel::<bevy::image::CompressedImageFormats>();
-    let (itx, irx) = std::sync::mpsc::channel::<Result<(bevy::image::Image, bevy::image::Image), String>>();
-    std::thread::spawn(move || {
-        if let Ok(f) = frx.recv() {
-            let _ = itx.send(
-                bevy::image::ktx2_buffer_to_image(k, f, true)
-                    .map(|mut i| {
-                        i.sampler = bevy::image::ImageSampler::linear();
-                        i
-                    })
-                    .and_then(|i| {
-                        bevy::image::ktx2_buffer_to_image(m, f, true).map(|mut j| {
-                            j.sampler = bevy::image::ImageSampler::linear();
-                            (i, j)
-                        })
-                    })
-                    .map_err(|e| e.to_string()),
-            );
+    #[derive(Clone, Copy)]
+    enum Phase {
+        Decoding,
+        Awake {
+            sleep_at: Option<std::time::Instant>,
+        },
+        Sleeping,
+        Failed,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Direction {
+        Opening,
+        Closing,
+    }
+
+    struct Textures {
+        background_size: bevy::math::Vec2,
+        menu: bevy::asset::Handle<bevy::image::Image>,
+    }
+
+    struct MenuPanel {
+        panel: bevy::ecs::entity::Entity,
+        edge: bevy::ecs::entity::Entity,
+        inset: bevy::ecs::entity::Entity,
+        progress: f32,
+        animation: Option<Direction>,
+        stepped_at: std::time::Instant,
+    }
+
+    struct Runtime {
+        phase: Phase,
+        background: Option<bevy::ecs::entity::Entity>,
+        camera: Option<bevy::ecs::entity::Entity>,
+        menu: Option<MenuPanel>,
+        textures: Option<Textures>,
+        viewport: (u32, u32),
+        escape_held_since: Option<std::time::Instant>,
+    }
+
+    impl Default for Runtime {
+        fn default() -> Self {
+            Runtime {
+                phase: Phase::Decoding,
+                background: None,
+                camera: None,
+                menu: None,
+                textures: None,
+                viewport: (0, 0),
+                escape_held_since: None,
+            }
         }
-    });
-    let mut a = bevy::app::App::new();
-    a.insert_resource(bevy::winit::WinitSettings {
-        focused_mode: bevy::winit::UpdateMode::Continuous,
-        unfocused_mode: bevy::winit::UpdateMode::Continuous,
-    });
-    a.add_plugins((
-        (
-            bevy::app::TaskPoolPlugin {
-                task_pool_options: bevy::app::TaskPoolOptions {
-                    min_total_threads: 1,
-                    max_total_threads: 1,
+    }
+
+    fn spawn_camera(commands: &mut bevy::ecs::system::Commands) -> bevy::ecs::entity::Entity {
+        commands
+            .spawn((
+                bevy::camera::Camera2d,
+                bevy::camera::Camera {
+                    clear_color: bevy::camera::ClearColorConfig::None,
                     ..Default::default()
                 },
-            },
-            bevy::time::TimePlugin,
-            bevy::diagnostic::FrameCountPlugin,
-            bevy::transform::TransformPlugin,
-            bevy::input::InputPlugin,
-            bevy::input_focus::InputFocusPlugin,
-            bevy::window::WindowPlugin {
-                primary_window: Some(bevy::window::Window {
-                    mode: bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary),
-                    present_mode: bevy::window::PresentMode::Mailbox,
-                    desired_maximum_frame_latency: std::num::NonZero::new(1),
-                    resizable: false,
-                    decorations: false,
-                    transparent: false,
-                    focused: true,
-                    visible: false,
-                    fit_canvas_to_parent: false,
-                    ..Default::default()
-                }),
-                close_when_requested: false,
-                exit_condition: bevy::window::ExitCondition::DontExit,
+            ))
+            .id()
+    }
+
+    fn decode_texture(
+        bytes: &[u8],
+        format: bevy::image::CompressedImageFormats,
+    ) -> Result<bevy::image::Image, String> {
+        bevy::image::ktx2_buffer_to_image(bytes, format, true)
+            .map(|mut image| {
+                image.sampler = bevy::image::ImageSampler::linear();
+                image
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn cover_scale(viewport: (u32, u32), texture: bevy::math::Vec2) -> f32 {
+        (viewport.0 as f32 / texture.x).max(viewport.1 as f32 / texture.y)
+    }
+
+    fn slide(eased: f32, width: f32) -> f32 {
+        -width / 2.0 + width * 0.21 / 2.0 - (1.0 - eased) * width * 0.21 * 1.05
+    }
+
+    fn draw_menu(
+        commands: &mut bevy::ecs::system::Commands,
+        menu: &MenuPanel,
+        textures: &Textures,
+        viewport: (u32, u32),
+        eased: f32,
+    ) {
+        let width = viewport.0 as f32;
+        let height = viewport.1 as f32;
+        let menu_width = width * 0.21;
+        let edge_width = (width * 0.0035).max(3.0);
+        let inset_width = (width * 0.0018).max(2.0);
+        let x = slide(eased, width);
+        commands.entity(menu.panel).insert((
+            bevy::sprite::Sprite {
+                image: textures.menu.clone(),
+                custom_size: Some(bevy::math::Vec2::new(menu_width, height)),
+                color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.86 * eased),
                 ..Default::default()
             },
-            bevy::a11y::AccessibilityPlugin,
-            bevy::asset::AssetPlugin {
-                file_path: String::new(),
-                watch_for_changes_override: Some(false),
-                ..Default::default()
-            },
-            bevy::mesh::MeshPlugin,
-        ),
-        (
-            bevy::camera::CameraPlugin,
-            bevy::winit::WinitPlugin::default(),
-            bevy::render::RenderPlugin {
-                render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
-                    bevy::render::settings::WgpuSettings {
-                        backends: Some(bevy::render::settings::Backends::VULKAN),
-                        power_preference: bevy::render::settings::PowerPreference::HighPerformance,
-                        ..Default::default()
-                    },
-                )),
-                synchronous_pipeline_compilation: false,
-                ..Default::default()
-            },
-            bevy::image::ImagePlugin::default(),
-            bevy::render::pipelined_rendering::PipelinedRenderingPlugin,
-            bevy::core_pipeline::CorePipelinePlugin,
-            bevy::sprite::SpritePlugin,
-            bevy::sprite_render::SpriteRenderPlugin,
-        ),
-    ));
-    let p = std::sync::Mutex::new(irx);
-    let q = std::sync::Mutex::new(ftx);
-    a.add_systems(
-        bevy::app::Update,
-        move |mut c: bevy::ecs::system::Commands,
-              mut wq: bevy::ecs::system::Query<&mut bevy::window::Window>,
-              mut ia: bevy::ecs::system::ResMut<bevy::asset::Assets<bevy::image::Image>>,
-              k: bevy::ecs::system::Res<bevy::input::ButtonInput<bevy::input::keyboard::KeyCode>>,
-              fs: Option<bevy::ecs::system::Res<bevy::image::CompressedImageFormatSupport>>,
-              mut ws: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>,
-              mut sf: bevy::ecs::system::Local<bool>,
-              mut s: bevy::ecs::system::Local<Option<bevy::ecs::entity::Entity>>,
-              mut im: bevy::ecs::system::Local<(f32, f32, Option<bevy::asset::Handle<bevy::image::Image>>)>,
-              mut cam: bevy::ecs::system::Local<Option<bevy::ecs::entity::Entity>>,
-              mut px: bevy::ecs::system::Local<(u32, u32)>,
-              mut id: bevy::ecs::system::Local<Option<std::time::Instant>>,
-              mut hd: bevy::ecs::system::Local<Option<std::time::Instant>>,
-              mut mn: bevy::ecs::system::Local<Option<(bevy::ecs::entity::Entity, bevy::ecs::entity::Entity, bevy::ecs::entity::Entity)>>,
-              mut ma: bevy::ecs::system::Local<(f32, Option<std::time::Instant>, f32, Option<std::time::Instant>)>| {
-            let mut w = wq.single_mut().unwrap();
-            if w.mode != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary) {
-                w.mode = bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
-            }
-            if w.decorations {
-                w.decorations = false;
-            }
-            if w.resizable {
-                w.resizable = false;
-            }
-            let ww = w.physical_width();
-            let wh = w.physical_height();
-            if !*sf {
-                if let Some(f) = fs.as_deref() {
-                    let _ = q.lock().map(|t| t.send(f.0));
-                    *sf = true;
-                }
-            }
-            if s.is_none() {
-                if let Some(r) = p.lock().ok().and_then(|g| g.try_recv().ok()) {
-                    match r {
-                        Err(e) => {
-                            eprintln!("arxumbra: {e}");
-                            c.write_message(bevy::app::AppExit::error());
-                        }
-                        Ok((i, j)) => {
-                            *im = (i.width() as f32, i.height() as f32, Some(ia.add(j)));
-                            let hw = ia.add(i);
-                            *s = Some(
-                                c.spawn((
-                                    bevy::sprite::Sprite {
-                                        image: hw,
-                                        custom_size: Some(bevy::math::Vec2::new(im.0, im.1)),
-                                        ..Default::default()
-                                    },
-                                    bevy::transform::components::Transform::from_scale(
-                                        bevy::math::Vec3::splat((ww as f32 / im.0).max(wh as f32 / im.1)),
-                                    ),
-                                ))
-                                .id(),
-                            );
-                            *cam = Some(
-                                c.spawn((
-                                    bevy::camera::Camera2d,
-                                    bevy::camera::Camera {
-                                        clear_color: bevy::camera::ClearColorConfig::None,
-                                        ..Default::default()
-                                    },
-                                ))
-                                .id(),
-                            );
-                            w.visible = true;
-                            *px = (ww, wh);
-                        }
-                    }
-                }
-            } else if ww != px.0 || wh != px.1 {
-                *px = (ww, wh);
-                c.entity(s.unwrap()).insert(bevy::transform::components::Transform::from_scale(
-                    bevy::math::Vec3::splat((ww as f32 / im.0).max(wh as f32 / im.1)),
-                ));
-                if cam.is_none() {
-                    *cam = Some(
-                        c.spawn((
-                            bevy::camera::Camera2d,
-                            bevy::camera::Camera {
-                                clear_color: bevy::camera::ClearColorConfig::None,
-                                ..Default::default()
-                            },
-                        ))
-                        .id(),
+            bevy::transform::components::Transform::from_xyz(x, 0.0, 1.0),
+        ));
+        commands.entity(menu.edge).insert((
+            bevy::sprite::Sprite::from_color(
+                bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92 * eased),
+                bevy::math::Vec2::new(edge_width, height),
+            ),
+            bevy::transform::components::Transform::from_xyz(
+                x + menu_width / 2.0 - edge_width / 2.0,
+                0.0,
+                2.0,
+            ),
+        ));
+        commands.entity(menu.inset).insert((
+            bevy::sprite::Sprite::from_color(
+                bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75 * eased),
+                bevy::math::Vec2::new(inset_width, height),
+            ),
+            bevy::transform::components::Transform::from_xyz(
+                x + menu_width / 2.0 - edge_width - 10.0 - inset_width / 2.0,
+                0.0,
+                2.0,
+            ),
+        ));
+    }
+
+    fn frame(
+        mut commands: bevy::ecs::system::Commands,
+        mut windows: bevy::ecs::system::Query<&mut bevy::window::Window>,
+        mut images: bevy::ecs::system::ResMut<bevy::asset::Assets<bevy::image::Image>>,
+        input: bevy::ecs::system::Res<bevy::input::ButtonInput<bevy::input::keyboard::KeyCode>>,
+        support: Option<bevy::ecs::system::Res<bevy::image::CompressedImageFormatSupport>>,
+        mut winit: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>,
+        mut app: bevy::ecs::system::Local<Runtime>,
+    ) {
+        let app: &mut Runtime = &mut *app;
+        let now = std::time::Instant::now();
+        let mut window = windows.single_mut().expect("primary window");
+
+        if window.mode
+            != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
+        {
+            window.mode =
+                bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
+        }
+        if window.decorations {
+            window.decorations = false;
+        }
+        if window.resizable {
+            window.resizable = false;
+        }
+
+        let size = (window.physical_width(), window.physical_height());
+
+        if let Some(textures) = app.textures.as_ref() {
+            if size != app.viewport {
+                app.viewport = size;
+                if let Some(background) = app.background {
+                    commands.entity(background).insert(
+                        bevy::transform::components::Transform::from_scale(bevy::math::Vec3::splat(
+                            cover_scale(size, textures.background_size),
+                        )),
                     );
                 }
-                *id = None;
-                if let Some((p, b, u)) = *mn {
-                    c.entity(p).despawn();
-                    c.entity(b).despawn();
-                    c.entity(u).despawn();
-                    *mn = None;
+                if app.camera.is_none() {
+                    app.camera = Some(spawn_camera(&mut commands));
                 }
-                *ma = (0.0, None, 0.0, None);
-                ws.focused_mode = bevy::winit::UpdateMode::Continuous;
-            } else if cam.is_some() && mn.is_none() && ma.3.is_none() {
-                if id.is_none() {
-                    *id = Some(std::time::Instant::now());
+                if let Some(menu) = app.menu.take() {
+                    commands.entity(menu.panel).despawn();
+                    commands.entity(menu.edge).despawn();
+                    commands.entity(menu.inset).despawn();
                 }
-                if let Some(at) = *id {
-                    if at.elapsed() >= std::time::Duration::from_millis(500) {
-                        c.entity(cam.take().unwrap()).despawn();
-                        *ws = bevy::winit::WinitSettings::desktop_app();
-                        *id = None;
-                    }
-                }
-            }
-            if k.just_pressed(bevy::input::keyboard::KeyCode::F1) {
-                if mn.is_some() {
-                    *ma = (ma.0, Some(std::time::Instant::now()), if ma.2 < 0.0 { 1.0 } else { -1.0 }, None);
-                } else if im.2.is_some() {
-                    if cam.is_none() {
-                        *cam = Some(
-                            c.spawn((
-                                bevy::camera::Camera2d,
-                                bevy::camera::Camera {
-                                    clear_color: bevy::camera::ClearColorConfig::None,
-                                    ..Default::default()
-                                },
-                            ))
-                            .id(),
-                        );
-                        *id = None;
-                    }
-                    let mw = 0.21 * ww as f32;
-                    let sw = (0.0035 * ww as f32).max(3.0);
-                    let pw = (0.0018 * ww as f32).max(2.0);
-                    let mx = -(ww as f32) / 2.0 + mw / 2.0;
-                    let dx = mx - mw * 1.05;
-                    *mn = Some((
-                        c.spawn(bevy::transform::components::Transform::from_xyz(dx, 0.0, 1.0)).id(),
-                        c.spawn(bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw / 2.0, 0.0, 2.0)).id(),
-                        c.spawn(bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw - 10.0 - pw / 2.0, 0.0, 2.0)).id(),
-                    ));
-                    *ma = (0.0, Some(std::time::Instant::now()), 1.0, None);
-                    ws.focused_mode = bevy::winit::UpdateMode::Continuous;
-                }
-            }
-            if mn.is_some() && ma.2 != 0.0 {
-                let now = std::time::Instant::now();
-                let dt = ma.1.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
-                ma.1 = Some(now);
-                ma.0 = if ma.2 > 0.0 {
-                    (ma.0 + dt / 0.25).min(1.0)
-                } else {
-                    (ma.0 - dt / 0.25).max(0.0)
+                winit.focused_mode = bevy::winit::UpdateMode::Continuous;
+                app.phase = Phase::Awake {
+                    sleep_at: Some(now + std::time::Duration::from_millis(500)),
                 };
-                if (ma.2 > 0.0 && ma.0 == 1.0) || (ma.2 < 0.0 && ma.0 == 0.0) {
-                    ma.2 = 0.0;
+            }
+        }
+
+        match app.phase {
+            Phase::Decoding => {
+                if let Some(supported) = support.as_deref() {
+                    let format = supported.0;
+                    let decoded = decode_texture(include_bytes!("../assets/000.ktx2"), format)
+                        .and_then(|background| {
+                            decode_texture(include_bytes!("../assets/menu.ktx2"), format)
+                                .map(|menu| (background, menu))
+                        });
+                    match decoded {
+                        Ok((background, menu)) => {
+                            let background_size = bevy::math::Vec2::new(
+                                background.width() as f32,
+                                background.height() as f32,
+                            );
+                            let menu_handle = images.add(menu);
+                            let background_handle = images.add(background);
+                            app.background = Some(
+                                commands
+                                    .spawn((
+                                        bevy::sprite::Sprite {
+                                            image: background_handle,
+                                            custom_size: Some(background_size),
+                                            ..Default::default()
+                                        },
+                                        bevy::transform::components::Transform::from_scale(
+                                            bevy::math::Vec3::splat(cover_scale(
+                                                size,
+                                                background_size,
+                                            )),
+                                        ),
+                                    ))
+                                    .id(),
+                            );
+                            app.camera = Some(spawn_camera(&mut commands));
+                            window.visible = true;
+                            app.textures = Some(Textures {
+                                background_size,
+                                menu: menu_handle,
+                            });
+                            app.viewport = size;
+                            app.phase = Phase::Awake {
+                                sleep_at: Some(now + std::time::Duration::from_millis(500)),
+                            };
+                        }
+                        Err(error) => {
+                            eprintln!("arxumbra: {error}");
+                            commands.write_message(bevy::app::AppExit::error());
+                            app.phase = Phase::Failed;
+                        }
+                    }
                 }
-                let sp = ma.0 * ma.0 * (3.0 - 2.0 * ma.0);
-                let mw = 0.21 * ww as f32;
-                let whf = wh as f32;
-                let sw = (0.0035 * ww as f32).max(3.0);
-                let pw = (0.0018 * ww as f32).max(2.0);
-                let mx = -(ww as f32) / 2.0 + mw / 2.0;
-                let dx = mx - (1.0 - sp) * mw * 1.05;
-                if let (Some((p, b, u)), Some(mh)) = (*mn, im.2.clone()) {
-                    c.entity(p).insert((
-                        bevy::sprite::Sprite {
-                            image: mh,
-                            custom_size: Some(bevy::math::Vec2::new(mw, whf)),
-                            color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.86 * sp),
+            }
+            Phase::Awake {
+                sleep_at: Some(sleep_at),
+            } if sleep_at <= now => {
+                if let Some(camera) = app.camera.take() {
+                    commands.entity(camera).despawn();
+                }
+                *winit = bevy::winit::WinitSettings::desktop_app();
+                app.phase = Phase::Sleeping;
+            }
+            Phase::Awake { .. } | Phase::Sleeping | Phase::Failed => {}
+        }
+
+        if input.just_pressed(bevy::input::keyboard::KeyCode::F1) {
+            if let Some(menu) = app.menu.as_mut() {
+                menu.animation = match menu.animation {
+                    Some(Direction::Opening) | None => Some(Direction::Closing),
+                    Some(Direction::Closing) => Some(Direction::Opening),
+                };
+            } else if app.textures.is_some() {
+                if app.camera.is_none() {
+                    app.camera = Some(spawn_camera(&mut commands));
+                }
+                let width = app.viewport.0 as f32;
+                let menu_width = width * 0.21;
+                let edge_width = (width * 0.0035).max(3.0);
+                let inset_width = (width * 0.0018).max(2.0);
+                let closed = slide(0.0, width);
+                app.menu = Some(MenuPanel {
+                    panel: commands
+                        .spawn(bevy::transform::components::Transform::from_xyz(
+                            closed, 0.0, 1.0,
+                        ))
+                        .id(),
+                    edge: commands
+                        .spawn(bevy::transform::components::Transform::from_xyz(
+                            closed + menu_width / 2.0 - edge_width / 2.0,
+                            0.0,
+                            2.0,
+                        ))
+                        .id(),
+                    inset: commands
+                        .spawn(bevy::transform::components::Transform::from_xyz(
+                            closed + menu_width / 2.0 - edge_width - 10.0 - inset_width / 2.0,
+                            0.0,
+                            2.0,
+                        ))
+                        .id(),
+                    progress: 0.0,
+                    animation: Some(Direction::Opening),
+                    stepped_at: now,
+                });
+                winit.focused_mode = bevy::winit::UpdateMode::Continuous;
+                app.phase = Phase::Awake { sleep_at: None };
+            }
+        }
+
+        let mut closing_finished = false;
+        if let (Some(menu), Some(textures)) = (app.menu.as_mut(), app.textures.as_ref()) {
+            if let Some(direction) = menu.animation {
+                let step = (now - menu.stepped_at).as_secs_f32() / 0.25;
+                menu.stepped_at = now;
+                menu.progress = match direction {
+                    Direction::Opening => (menu.progress + step).min(1.0),
+                    Direction::Closing => (menu.progress - step).max(0.0),
+                };
+                let eased = menu.progress * menu.progress * (3.0 - 2.0 * menu.progress);
+                draw_menu(&mut commands, menu, textures, app.viewport, eased);
+                let finished = match direction {
+                    Direction::Opening => menu.progress >= 1.0,
+                    Direction::Closing => menu.progress <= 0.0,
+                };
+                if finished {
+                    match direction {
+                        Direction::Opening => menu.animation = None,
+                        Direction::Closing => {
+                            commands.entity(menu.panel).despawn();
+                            commands.entity(menu.edge).despawn();
+                            commands.entity(menu.inset).despawn();
+                            closing_finished = true;
+                        }
+                    }
+                }
+            }
+        }
+        if closing_finished {
+            app.menu = None;
+            app.phase = Phase::Awake {
+                sleep_at: Some(now + std::time::Duration::from_millis(250)),
+            };
+        }
+
+        if input.just_pressed(bevy::input::keyboard::KeyCode::Escape) {
+            app.escape_held_since = Some(now);
+            winit.focused_mode =
+                bevy::winit::UpdateMode::reactive(std::time::Duration::from_millis(100));
+        }
+        if input.just_released(bevy::input::keyboard::KeyCode::Escape) {
+            app.escape_held_since = None;
+            if app.camera.is_some() {
+                winit.focused_mode = bevy::winit::UpdateMode::Continuous;
+            } else {
+                *winit = bevy::winit::WinitSettings::desktop_app();
+            }
+        }
+        if app
+            .escape_held_since
+            .is_some_and(|pressed_at| now - pressed_at >= std::time::Duration::from_secs(7))
+        {
+            commands.write_message(bevy::app::AppExit::Success);
+        }
+    }
+
+    bevy::app::App::new()
+        .insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+        })
+        .add_plugins((
+            (
+                bevy::app::TaskPoolPlugin {
+                    task_pool_options: bevy::app::TaskPoolOptions {
+                        min_total_threads: 1,
+                        max_total_threads: 1,
+                        ..Default::default()
+                    },
+                },
+                bevy::time::TimePlugin,
+                bevy::diagnostic::FrameCountPlugin,
+                bevy::transform::TransformPlugin,
+                bevy::input::InputPlugin,
+                bevy::input_focus::InputFocusPlugin,
+                bevy::window::WindowPlugin {
+                    primary_window: Some(bevy::window::Window {
+                        mode: bevy::window::WindowMode::BorderlessFullscreen(
+                            bevy::window::MonitorSelection::Primary,
+                        ),
+                        present_mode: bevy::window::PresentMode::Mailbox,
+                        desired_maximum_frame_latency: std::num::NonZero::new(1),
+                        resizable: false,
+                        decorations: false,
+                        transparent: false,
+                        focused: true,
+                        visible: false,
+                        fit_canvas_to_parent: false,
+                        ..Default::default()
+                    }),
+                    close_when_requested: false,
+                    exit_condition: bevy::window::ExitCondition::DontExit,
+                    ..Default::default()
+                },
+                bevy::a11y::AccessibilityPlugin,
+                bevy::asset::AssetPlugin {
+                    file_path: String::new(),
+                    watch_for_changes_override: Some(false),
+                    ..Default::default()
+                },
+                bevy::mesh::MeshPlugin,
+            ),
+            (
+                bevy::camera::CameraPlugin,
+                bevy::winit::WinitPlugin::default(),
+                bevy::render::RenderPlugin {
+                    render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
+                        bevy::render::settings::WgpuSettings {
+                            backends: Some(bevy::render::settings::Backends::VULKAN),
+                            power_preference: bevy::render::settings::PowerPreference::HighPerformance,
                             ..Default::default()
                         },
-                        bevy::transform::components::Transform::from_xyz(dx, 0.0, 1.0),
-                    ));
-                    c.entity(b).insert((
-                        bevy::sprite::Sprite::from_color(
-                            bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92 * sp),
-                            bevy::math::Vec2::new(sw, whf),
-                        ),
-                        bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw / 2.0, 0.0, 2.0),
-                    ));
-                    c.entity(u).insert((
-                        bevy::sprite::Sprite::from_color(
-                            bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75 * sp),
-                            bevy::math::Vec2::new(pw, whf),
-                        ),
-                        bevy::transform::components::Transform::from_xyz(dx + mw / 2.0 - sw - 10.0 - pw / 2.0, 0.0, 2.0),
-                    ));
-                }
-                if ma.0 == 0.0 && ma.2 == 0.0 {
-                    if let Some((p, b, u)) = *mn {
-                        c.entity(p).despawn();
-                        c.entity(b).despawn();
-                        c.entity(u).despawn();
-                    }
-                    *mn = None;
-                    *ma = (0.0, None, 0.0, Some(std::time::Instant::now()));
-                }
-            }
-            if let Some(at) = ma.3 {
-                if at.elapsed() >= std::time::Duration::from_millis(250) {
-                    *ma = (0.0, None, 0.0, None);
-                    if cam.is_some() {
-                        c.entity(cam.take().unwrap()).despawn();
-                    }
-                    *ws = bevy::winit::WinitSettings::desktop_app();
-                }
-            }
-            if k.just_pressed(bevy::input::keyboard::KeyCode::Escape) {
-                *hd = Some(std::time::Instant::now());
-                ws.focused_mode = bevy::winit::UpdateMode::reactive(std::time::Duration::from_millis(100));
-            }
-            if k.just_released(bevy::input::keyboard::KeyCode::Escape) {
-                *hd = None;
-                if cam.is_some() {
-                    ws.focused_mode = bevy::winit::UpdateMode::Continuous;
-                } else {
-                    *ws = bevy::winit::WinitSettings::desktop_app();
-                }
-            }
-            if let Some(at) = *hd {
-                if at.elapsed() >= std::time::Duration::from_secs(7) {
-                    std::process::exit(0);
-                }
-            }
-        },
-    );
-    a.run();
+                    )),
+                    synchronous_pipeline_compilation: false,
+                    ..Default::default()
+                },
+                bevy::image::ImagePlugin::default(),
+                bevy::render::pipelined_rendering::PipelinedRenderingPlugin,
+                bevy::core_pipeline::CorePipelinePlugin,
+                bevy::sprite::SpritePlugin,
+                bevy::sprite_render::SpriteRenderPlugin,
+            ),
+        ))
+        .add_systems(bevy::app::Update, frame)
+        .run();
 }
