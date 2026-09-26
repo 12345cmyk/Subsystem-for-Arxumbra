@@ -1,10 +1,10 @@
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "11.0.0"
+version = "0.0.4"
 edition = "2024"
 
 [[bin]]
-name = "linux-subsystem-for-arxumbra"
+name = "subsystem-for-arxumbra"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,9 +21,7 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "bevy_image",
     "bevy_sprite",
     "bevy_sprite_render",
-    "ktx2",
-    "basis-universal",
-    "zstd_rust",
+    "jpeg",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
