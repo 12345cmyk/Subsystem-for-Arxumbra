@@ -10,31 +10,40 @@ permissions:
   contents: write
 
 env:
-  BIN: linux-subsystem-for-arxumbra
+  BIN: subsystem-for-arxumbra
+  X86_BASE: "-Ctarget-cpu=x86-64 -Ctarget-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -Cllvm-args=--inline-threshold=1000"
 
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 
       - name: Rust toolchain
         run: |
-          rustup toolchain install nightly-2026-09-13 --profile minimal
-          rustup default nightly-2026-09-13
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
-      - name: Build dependencies (wayland) + smoke dependencies (weston, lavapipe)
+      - name: System dependencies (wayland, weston, lavapipe, llvm-18, bolt, lld, perf)
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
-            weston mesa-vulkan-drivers
+            weston mesa-vulkan-drivers \
+            llvm-18 llvm-bolt lld-18 xz-utils \
+            linux-tools-common linux-tools-generic "linux-tools-$(uname -r)"
+          sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
 
-      - name: Build (FAT LTO, strip)
-        run: cargo build --release --locked
+      - name: Stage 1 - locked dependency fetch
+        run: cargo fetch --locked
 
-      - name: Smoke (25 c, пустой stderr = обе текстуры декодированы)
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+        run: |
+          mkdir -p pgo-profile
+          RUSTFLAGS="$X86_BASE -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+
+      - name: Stage 3 - headless profile run (weston + lavapipe, empty stderr = both jpg textures decoded)
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
           weston --backend=headless-backend.so --socket=arx-smoke --idle-time=0 &
@@ -43,29 +52,203 @@ jobs:
           export WAYLAND_DISPLAY=arx-smoke
           export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
           export WGPU_BACKEND=vulkan
+          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default_%m%c.profraw"
           timeout 25 target/release/$BIN 2>/tmp/smoke.err || true
           if [ -s /tmp/smoke.err ]; then
             echo "::error::Smoke-прогон написал в stderr:"
             cat /tmp/smoke.err
             exit 1
           fi
-          echo "Smoke OK: stderr пуст"
+          [ -n "$(ls -A pgo-profile)" ] || { echo "::error::профиль PGO не собран"; exit 1; }
 
-      - name: Artifact
+      - name: Stage 4 - merge PGO profile
+        run: llvm-profdata-18 merge -o pgo.profdata pgo-profile/
+
+      - name: Stage 5 - PGO build (profile-use, fat LTO, lld, emit-relocs, symtab for BOLT)
         run: |
+          RUSTFLAGS="$X86_BASE -Cprofile-use=$PWD/pgo.profdata -fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro -Clink-arg=-Wl,--emit-relocs -Cstrip=none" cargo build --release --locked
+
+      - name: Stage 6 - perf sampling (LBR with fallback to basic sampling)
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          weston --backend=headless-backend.so --socket=arx-bolt --idle-time=0 &
+          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-bolt" ] && break; sleep 1; done
+          [ -e "$XDG_RUNTIME_DIR/arx-bolt" ] || { echo "::error::weston не поднялся"; exit 1; }
+          export WAYLAND_DISPLAY=arx-bolt
+          export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          export WGPU_BACKEND=vulkan
+          sudo sysctl kernel.perf_event_paranoid=-1 || true
+          set +e
+          perf record -e cycles:u -j any,u -o perf.fdata -- timeout 25 target/release/$BIN
+          if [ ! -s perf.fdata ]; then
+            perf record -e cycles:u -o perf.fdata -- timeout 25 target/release/$BIN
+          fi
+          set -e
+          [ -s perf.fdata ] || { echo "::error::perf не собрал сэмпл-профиль"; exit 1; }
+
+      - name: Stage 7 - BOLT post-link optimization (ext-tsp, hfsort+, function splitting)
+        run: |
+          P2B=$(command -v perf2bolt || command -v perf2bolt-18)
+          BOLT=$(command -v llvm-bolt || command -v llvm-bolt-18)
+          "$P2B" -p perf.fdata -o perf.fdata2 target/release/$BIN
+          "$BOLT" target/release/$BIN -o target/release/$BIN.bolt \
+            -data=perf.fdata2 \
+            -reorder-blocks=ext-tsp \
+            -reorder-functions=hfsort+ \
+            -split-functions \
+            -split-all-cold \
+            -split-eh \
+            -dyno-stats
+          mv target/release/$BIN.bolt target/release/$BIN
+
+      - name: Stage 8 - verification run (post-BOLT binary, empty stderr)
+        run: |
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          weston --backend=headless-backend.so --socket=arx-verify --idle-time=0 &
+          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-verify" ] && break; sleep 1; done
+          [ -e "$XDG_RUNTIME_DIR/arx-verify" ] || { echo "::error::weston не поднялся"; exit 1; }
+          export WAYLAND_DISPLAY=arx-verify
+          export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          export WGPU_BACKEND=vulkan
+          timeout 25 target/release/$BIN 2>/tmp/verify.err || true
+          if [ -s /tmp/verify.err ]; then
+            echo "::error::Верификация после BOLT написала в stderr:"
+            cat /tmp/verify.err
+            exit 1
+          fi
+
+      - name: Stage 9 - strip and compress
+        run: |
+          llvm-strip-18 --strip-all target/release/$BIN
           mkdir dist
           cp target/release/$BIN dist/$BIN
-          tar czf dist/$BIN-linux-x86_64.tar.gz -C dist $BIN
-          rm dist/$BIN
-          sha256sum dist/$BIN-linux-x86_64.tar.gz > dist/SHA256SUMS.txt
+          xz -9e -T2 dist/$BIN
+          sha256sum dist/$BIN.xz > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
           path: dist/*
 
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable-msvc --profile minimal
+          rustup default stable-msvc
+          rustup component add llvm-tools
+
+      - name: Stage 1 - locked dependency fetch
+        run: cargo fetch --locked
+
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pgo-profile | Out-Null
+          $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage 3 - profile run (best effort)
+        shell: pwsh
+        run: |
+          $env:LLVM_PROFILE_FILE = "$env:GITHUB_WORKSPACE\pgo-profile\default_%m%c.profraw"
+          $proc = Start-Process -FilePath "target\release\subsystem-for-arxumbra.exe" -PassThru -RedirectStandardError smoke.err -ErrorAction SilentlyContinue
+          if ($proc) {
+            Start-Sleep -Seconds 25
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
+          exit 0
+
+      - name: Stage 4 - PGO build or fallback (fat LTO)
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot)
+          $profdata = Get-ChildItem -Path "$sysroot\lib\rustlib" -Recurse -Filter "llvm-profdata.exe" | Select-Object -First 1
+          $profile_raw = Get-ChildItem pgo-profile -ErrorAction SilentlyContinue
+          if ($profile_raw -and $profdata) {
+            & $profdata.FullName merge -o pgo.profdata pgo-profile
+            $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-use=$env:GITHUB_WORKSPACE\pgo.profdata"
+          } else {
+            Write-Output "профиль недоступен, собираю чистый fat LTO релиз"
+            $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF"
+          }
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage 5 - artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "target\release\subsystem-for-arxumbra.exe" "dist\subsystem-for-arxumbra.exe"
+          tar czf "dist\subsystem-for-arxumbra-windows-x86_64.tar.gz" -C dist "subsystem-for-arxumbra.exe"
+          Remove-Item "dist\subsystem-for-arxumbra.exe"
+          (Get-FileHash "dist\subsystem-for-arxumbra-windows-x86_64.tar.gz" -Algorithm SHA256).Hash.ToLower() + "  subsystem-for-arxumbra-windows-x86_64.tar.gz" | Out-File -Encoding ascii "dist\SHA256SUMS.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add llvm-tools
+
+      - name: Stage 1 - locked dependency fetch
+        run: cargo fetch --locked
+
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+        run: |
+          mkdir -p pgo-profile
+          RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+
+      - name: Stage 3 - profile run (best effort)
+        run: |
+          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default_%m%c.profraw"
+          ./target/release/subsystem-for-arxumbra 2>/dev/null &
+          APP_PID=$!
+          sleep 25
+          kill -9 $APP_PID 2>/dev/null || true
+          exit 0
+
+      - name: Stage 4 - PGO build or fallback (fat LTO)
+        run: |
+          PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
+          if [ -n "$(ls -A pgo-profile 2>/dev/null)" ] && [ -n "$PROFDATA" ]; then
+            "$PROFDATA" merge -o pgo.profdata pgo-profile/
+            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked
+          else
+            echo "профиль недоступен, собираю чистый fat LTO релиз"
+            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked
+          fi
+
+      - name: Stage 5 - artifact
+        run: |
+          mkdir dist
+          cp target/release/subsystem-for-arxumbra dist/subsystem-for-arxumbra
+          tar czf dist/subsystem-for-arxumbra-macos-aarch64.tar.gz -C dist subsystem-for-arxumbra
+          rm dist/subsystem-for-arxumbra
+          shasum -a 256 dist/subsystem-for-arxumbra-macos-aarch64.tar.gz > dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
+          path: dist/*
+
   release:
-    needs: linux
+    needs: [linux, windows, macos]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -76,5 +259,8 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/linux-x86_64/*
+          files: |
+            dist/linux-x86_64/*
+            dist/windows-x86_64/*
+            dist/macos-aarch64/*
           generate_release_notes: true
