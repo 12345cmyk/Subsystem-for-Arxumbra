@@ -70,7 +70,7 @@ jobs:
 
       - name: Stage 5 - PGO build (profile-use, fat LTO, lld, emit-relocs, symtab for BOLT)
         run: |
-          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro -Clink-arg=-Wl,--emit-relocs -Cstrip=none" cargo build --release --locked
+          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro -Clink-arg=-Wl,--emit-relocs -Cstrip=none" cargo build --release --locked
 
       - name: Stage 6 - perf sampling (LBR with fallback to basic sampling)
         run: |
