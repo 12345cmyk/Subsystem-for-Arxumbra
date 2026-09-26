@@ -24,6 +24,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
+          rustup component add llvm-tools
 
       - name: System dependencies (wayland, weston, lavapipe, llvm-18, bolt, lld, perf)
         run: |
@@ -62,7 +63,10 @@ jobs:
           [ -s pgo-profile/default.profraw ] || { echo "::error::профиль PGO не собран"; exit 1; }
 
       - name: Stage 4 - merge PGO profile
-        run: llvm-profdata-18 merge -o pgo.profdata pgo-profile/
+        run: |
+          PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
+          [ -x "$PROFDATA" ] || { echo "::error::llvm-profdata из sysroot не найден"; exit 1; }
+          "$PROFDATA" merge -o pgo.profdata pgo-profile/
 
       - name: Stage 5 - PGO build (profile-use, fat LTO, lld, emit-relocs, symtab for BOLT)
         run: |
