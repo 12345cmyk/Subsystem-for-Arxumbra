@@ -11,7 +11,7 @@ permissions:
 
 env:
   BIN: subsystem-for-arxumbra
-  X86_BASE: "-Ctarget-cpu=x86-64 -Ctarget-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -Cllvm-args=--inline-threshold=1000"
+  X86_BASE: "-Ctarget-cpu=x86-64 -Ctarget-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha"
 
 jobs:
   linux:
@@ -41,9 +41,9 @@ jobs:
       - name: Stage 2 - instrumented build (PGO generate, fat LTO)
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="$X86_BASE -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+          RUSTFLAGS="$X86_BASE -Cllvm-args=-vp-counters-per-site=0 -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
 
-      - name: Stage 3 - headless profile run (weston + lavapipe, empty stderr = both jpg textures decoded)
+      - name: Stage 3 - headless profile run (weston + lavapipe, SIGINT = graceful exit, empty stderr = both ktx2 textures decoded)
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
           weston --backend=headless-backend.so --socket=arx-smoke --idle-time=0 &
@@ -52,21 +52,21 @@ jobs:
           export WAYLAND_DISPLAY=arx-smoke
           export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
           export WGPU_BACKEND=vulkan
-          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default_%m%c.profraw"
-          timeout 25 target/release/$BIN 2>/tmp/smoke.err || true
+          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
+          timeout -s INT 25 target/release/$BIN 2>/tmp/smoke.err || true
           if [ -s /tmp/smoke.err ]; then
             echo "::error::Smoke-прогон написал в stderr:"
             cat /tmp/smoke.err
             exit 1
           fi
-          [ -n "$(ls -A pgo-profile)" ] || { echo "::error::профиль PGO не собран"; exit 1; }
+          [ -s pgo-profile/default.profraw ] || { echo "::error::профиль PGO не собран"; exit 1; }
 
       - name: Stage 4 - merge PGO profile
         run: llvm-profdata-18 merge -o pgo.profdata pgo-profile/
 
       - name: Stage 5 - PGO build (profile-use, fat LTO, lld, emit-relocs, symtab for BOLT)
         run: |
-          RUSTFLAGS="$X86_BASE -Cprofile-use=$PWD/pgo.profdata -fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro -Clink-arg=-Wl,--emit-relocs -Cstrip=none" cargo build --release --locked
+          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro -Clink-arg=-Wl,--emit-relocs -Cstrip=none" cargo build --release --locked
 
       - name: Stage 6 - perf sampling (LBR with fallback to basic sampling)
         run: |
@@ -79,9 +79,9 @@ jobs:
           export WGPU_BACKEND=vulkan
           sudo sysctl kernel.perf_event_paranoid=-1 || true
           set +e
-          perf record -e cycles:u -j any,u -o perf.fdata -- timeout 25 target/release/$BIN
+          perf record -e cycles:u -j any,u -o perf.fdata -- timeout -s INT 25 target/release/$BIN
           if [ ! -s perf.fdata ]; then
-            perf record -e cycles:u -o perf.fdata -- timeout 25 target/release/$BIN
+            perf record -e cycles:u -o perf.fdata -- timeout -s INT 25 target/release/$BIN
           fi
           set -e
           [ -s perf.fdata ] || { echo "::error::perf не собрал сэмпл-профиль"; exit 1; }
@@ -110,7 +110,7 @@ jobs:
           export WAYLAND_DISPLAY=arx-verify
           export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
           export WGPU_BACKEND=vulkan
-          timeout 25 target/release/$BIN 2>/tmp/verify.err || true
+          timeout -s INT 25 target/release/$BIN 2>/tmp/verify.err || true
           if [ -s /tmp/verify.err ]; then
             echo "::error::Верификация после BOLT написала в stderr:"
             cat /tmp/verify.err
@@ -128,6 +128,60 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
+          path: dist/*
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add llvm-tools
+
+      - name: Stage 1 - locked dependency fetch
+        run: cargo fetch --locked
+
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+        run: |
+          mkdir -p pgo-profile
+          RUSTFLAGS="-Cllvm-args=-vp-counters-per-site=0 -Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+
+      - name: Stage 3 - profile run (SIGINT = graceful exit, best effort)
+        run: |
+          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
+          ./target/release/subsystem-for-arxumbra 2>/dev/null &
+          APP_PID=$!
+          sleep 25
+          kill -INT $APP_PID 2>/dev/null || true
+          wait $APP_PID 2>/dev/null || true
+          exit 0
+
+      - name: Stage 4 - PGO build or fallback (fat LTO)
+        run: |
+          PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
+          if [ -s pgo-profile/default.profraw ] && [ -n "$PROFDATA" ]; then
+            "$PROFDATA" merge -o pgo.profdata pgo-profile/
+            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked
+          else
+            echo "профиль недоступен, собираю чистый fat LTO релиз"
+            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked
+          fi
+
+      - name: Stage 5 - artifact
+        run: |
+          mkdir dist
+          cp target/release/subsystem-for-arxumbra dist/subsystem-for-arxumbra
+          tar czf dist/subsystem-for-arxumbra-macos-aarch64.tar.gz -C dist subsystem-for-arxumbra
+          rm dist/subsystem-for-arxumbra
+          shasum -a 256 dist/subsystem-for-arxumbra-macos-aarch64.tar.gz > dist/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
           path: dist/*
 
   windows:
@@ -149,14 +203,14 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pgo-profile | Out-Null
-          $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
+          $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=-vp-counters-per-site=0 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Stage 3 - profile run (best effort)
         shell: pwsh
         run: |
-          $env:LLVM_PROFILE_FILE = "$env:GITHUB_WORKSPACE\pgo-profile\default_%m%c.profraw"
+          $env:LLVM_PROFILE_FILE = "$env:GITHUB_WORKSPACE\pgo-profile\default.profraw"
           $proc = Start-Process -FilePath "target\release\subsystem-for-arxumbra.exe" -PassThru -RedirectStandardError smoke.err -ErrorAction SilentlyContinue
           if ($proc) {
             Start-Sleep -Seconds 25
@@ -169,13 +223,12 @@ jobs:
         run: |
           $sysroot = (rustc --print sysroot)
           $profdata = Get-ChildItem -Path "$sysroot\lib\rustlib" -Recurse -Filter "llvm-profdata.exe" | Select-Object -First 1
-          $profile_raw = Get-ChildItem pgo-profile -ErrorAction SilentlyContinue
-          if ($profile_raw -and $profdata) {
+          if ((Test-Path "pgo-profile\default.profraw") -and $profdata) {
             & $profdata.FullName merge -o pgo.profdata pgo-profile
-            $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-use=$env:GITHUB_WORKSPACE\pgo.profdata"
+            $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-use=$env:GITHUB_WORKSPACE\pgo.profdata"
           } else {
             Write-Output "профиль недоступен, собираю чистый fat LTO релиз"
-            $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF"
+            $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF"
           }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -194,61 +247,8 @@ jobs:
           name: windows-x86_64
           path: dist/*
 
-  macos:
-    runs-on: macos-latest
-    timeout-minutes: 240
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup component add llvm-tools
-
-      - name: Stage 1 - locked dependency fetch
-        run: cargo fetch --locked
-
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
-        run: |
-          mkdir -p pgo-profile
-          RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
-
-      - name: Stage 3 - profile run (best effort)
-        run: |
-          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default_%m%c.profraw"
-          ./target/release/subsystem-for-arxumbra 2>/dev/null &
-          APP_PID=$!
-          sleep 25
-          kill -9 $APP_PID 2>/dev/null || true
-          exit 0
-
-      - name: Stage 4 - PGO build or fallback (fat LTO)
-        run: |
-          PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
-          if [ -n "$(ls -A pgo-profile 2>/dev/null)" ] && [ -n "$PROFDATA" ]; then
-            "$PROFDATA" merge -o pgo.profdata pgo-profile/
-            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked
-          else
-            echo "профиль недоступен, собираю чистый fat LTO релиз"
-            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked
-          fi
-
-      - name: Stage 5 - artifact
-        run: |
-          mkdir dist
-          cp target/release/subsystem-for-arxumbra dist/subsystem-for-arxumbra
-          tar czf dist/subsystem-for-arxumbra-macos-aarch64.tar.gz -C dist subsystem-for-arxumbra
-          rm dist/subsystem-for-arxumbra
-          shasum -a 256 dist/subsystem-for-arxumbra-macos-aarch64.tar.gz > dist/SHA256SUMS.txt
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-aarch64
-          path: dist/*
-
   release:
-    needs: [linux, windows, macos]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -261,6 +261,6 @@ jobs:
         with:
           files: |
             dist/linux-x86_64/*
-            dist/windows-x86_64/*
             dist/macos-aarch64/*
+            dist/windows-x86_64/*
           generate_release_notes: true
