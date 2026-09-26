@@ -94,7 +94,14 @@ jobs:
         run: |
           P2B=$(command -v perf2bolt || command -v perf2bolt-18)
           BOLT=$(command -v llvm-bolt || command -v llvm-bolt-18)
+          set +e
           "$P2B" -p perf.fdata -o perf.fdata2 target/release/$BIN
+          P2B_RC=$?
+          set -e
+          if [ $P2B_RC -ne 0 ] || [ ! -s perf.fdata2 ]; then
+            "$P2B" -p perf.fdata -o perf.fdata2 -nl target/release/$BIN
+          fi
+          [ -s perf.fdata2 ] || { echo "::error::perf2bolt не извлёк профиль"; exit 1; }
           "$BOLT" target/release/$BIN -o target/release/$BIN.bolt \
             -data=perf.fdata2 \
             -reorder-blocks=ext-tsp \
