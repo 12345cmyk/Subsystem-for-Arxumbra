@@ -1,13 +1,14 @@
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "12.0.0"
+version = "0.0.4"
 edition = "2024"
 
 [[bin]]
 name = "subsystem-for-arxumbra"
 path = "src/main.rs"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+basisu = "0.1"
 mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
     "std",
@@ -21,12 +22,41 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "bevy_image",
     "bevy_sprite",
     "bevy_sprite_render",
-    "jpeg",
+    "wayland",
 ] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
+basisu = "0.1"
+mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
-    "wayland",
+    "std",
+    "multi_threaded",
+    "keyboard",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_input_focus",
+    "bevy_core_pipeline",
+    "bevy_asset",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_sprite_render",
+] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+basisu = "0.1"
+mimalloc = "0.1"
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "keyboard",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_input_focus",
+    "bevy_core_pipeline",
+    "bevy_asset",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_sprite_render",
 ] }
 
 [profile.release]
