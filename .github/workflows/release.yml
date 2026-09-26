@@ -26,14 +26,13 @@ jobs:
           rustup default stable
           rustup component add llvm-tools
 
-      - name: System dependencies (wayland, weston, lavapipe, llvm-18, bolt, lld, perf)
+      - name: System dependencies (wayland, weston, lavapipe, llvm-18, lld)
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers \
-            llvm-18 llvm-bolt lld-18 xz-utils \
-            linux-tools-common linux-tools-generic "linux-tools-$(uname -r)"
+            llvm-18 lld-18 xz-utils
           sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
 
       - name: Stage 1 - locked dependency fetch
@@ -68,51 +67,11 @@ jobs:
           [ -x "$PROFDATA" ] || { echo "::error::llvm-profdata из sysroot не найден"; exit 1; }
           "$PROFDATA" merge -o pgo.profdata pgo-profile/
 
-      - name: Stage 5 - PGO build (profile-use, fat LTO, lld, emit-relocs, symtab for BOLT)
+      - name: Stage 5 - PGO build (profile-use, fat LTO, lld)
         run: |
-          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro -Clink-arg=-Wl,--emit-relocs -Cstrip=none" cargo build --release --locked
+          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro" cargo build --release --locked
 
-      - name: Stage 6 - perf sampling (LBR with fallback to basic sampling)
-        run: |
-          export XDG_RUNTIME_DIR=$(mktemp -d)
-          weston --backend=headless-backend.so --socket=arx-bolt --idle-time=0 &
-          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-bolt" ] && break; sleep 1; done
-          [ -e "$XDG_RUNTIME_DIR/arx-bolt" ] || { echo "::error::weston не поднялся"; exit 1; }
-          export WAYLAND_DISPLAY=arx-bolt
-          export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
-          export WGPU_BACKEND=vulkan
-          sudo sysctl kernel.perf_event_paranoid=-1 || true
-          set +e
-          perf record -e cycles:u -j any,u -o perf.fdata -- timeout -s INT 25 target/release/$BIN
-          if [ ! -s perf.fdata ]; then
-            perf record -e cycles:u -o perf.fdata -- timeout -s INT 25 target/release/$BIN
-          fi
-          set -e
-          [ -s perf.fdata ] || { echo "::error::perf не собрал сэмпл-профиль"; exit 1; }
-
-      - name: Stage 7 - BOLT post-link optimization (ext-tsp, hfsort+, function splitting)
-        run: |
-          P2B=$(command -v perf2bolt || command -v perf2bolt-18)
-          BOLT=$(command -v llvm-bolt || command -v llvm-bolt-18)
-          set +e
-          "$P2B" -p perf.fdata -o perf.fdata2 target/release/$BIN
-          P2B_RC=$?
-          set -e
-          if [ $P2B_RC -ne 0 ] || [ ! -s perf.fdata2 ]; then
-            "$P2B" -p perf.fdata -o perf.fdata2 -nl target/release/$BIN
-          fi
-          [ -s perf.fdata2 ] || { echo "::error::perf2bolt не извлёк профиль"; exit 1; }
-          "$BOLT" target/release/$BIN -o target/release/$BIN.bolt \
-            -data=perf.fdata2 \
-            -reorder-blocks=ext-tsp \
-            -reorder-functions=hfsort+ \
-            -split-functions \
-            -split-all-cold \
-            -split-eh \
-            -dyno-stats
-          mv target/release/$BIN.bolt target/release/$BIN
-
-      - name: Stage 8 - verification run (post-BOLT binary, empty stderr)
+      - name: Stage 6 - verification run (shipped PGO binary, empty stderr)
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
           weston --backend=headless-backend.so --socket=arx-verify --idle-time=0 &
@@ -123,12 +82,12 @@ jobs:
           export WGPU_BACKEND=vulkan
           timeout -s INT 25 target/release/$BIN 2>/tmp/verify.err || true
           if [ -s /tmp/verify.err ]; then
-            echo "::error::Верификация после BOLT написала в stderr:"
+            echo "::error::Верификация PGO-бинаря написала в stderr:"
             cat /tmp/verify.err
             exit 1
           fi
 
-      - name: Stage 9 - strip and compress
+      - name: Stage 7 - strip and compress
         run: |
           llvm-strip-18 --strip-all target/release/$BIN
           mkdir dist
