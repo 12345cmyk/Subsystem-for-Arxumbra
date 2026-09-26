@@ -41,7 +41,7 @@ jobs:
       - name: Stage 2 - instrumented build (PGO generate, fat LTO)
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="$X86_BASE -Cllvm-args=-vp-counters-per-site=0 -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+          RUSTFLAGS="$X86_BASE -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
 
       - name: Stage 3 - headless profile run (weston + lavapipe, SIGINT = graceful exit, empty stderr = both ktx2 textures decoded)
         run: |
@@ -54,7 +54,7 @@ jobs:
           export WGPU_BACKEND=vulkan
           export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
           timeout -s INT 25 target/release/$BIN 2>/tmp/smoke.err || true
-          if [ -s /tmp/smoke.err ]; then
+          if grep -v "^LLVM Profile Warning:" /tmp/smoke.err | grep -q .; then
             echo "::error::Smoke-прогон написал в stderr:"
             cat /tmp/smoke.err
             exit 1
@@ -148,7 +148,7 @@ jobs:
       - name: Stage 2 - instrumented build (PGO generate, fat LTO)
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="-Cllvm-args=-vp-counters-per-site=0 -Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+          RUSTFLAGS="-Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
 
       - name: Stage 3 - profile run (SIGINT = graceful exit, best effort)
         run: |
@@ -203,7 +203,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pgo-profile | Out-Null
-          $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=-vp-counters-per-site=0 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
+          $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
