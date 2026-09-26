@@ -5,356 +5,20 @@
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
-    #[derive(Clone, Copy)]
-    enum Phase {
-        Decoding,
-        Awake {
-            sleep_at: Option<std::time::Instant>,
-        },
-        Sleeping,
-        Failed,
-    }
-
-    #[derive(Clone, Copy)]
-    enum Direction {
-        Opening,
-        Closing,
-    }
-
-    struct Textures {
-        background_size: bevy::math::Vec2,
-        menu: bevy::asset::Handle<bevy::image::Image>,
-    }
-
-    struct MenuPanel {
-        panel: bevy::ecs::entity::Entity,
-        edge: bevy::ecs::entity::Entity,
-        inset: bevy::ecs::entity::Entity,
-        progress: f32,
-        animation: Option<Direction>,
-        stepped_at: std::time::Instant,
-    }
-
-    struct Runtime {
-        phase: Phase,
-        background: Option<bevy::ecs::entity::Entity>,
-        camera: Option<bevy::ecs::entity::Entity>,
-        menu: Option<MenuPanel>,
-        textures: Option<Textures>,
-        viewport: (u32, u32),
-        escape_held_since: Option<std::time::Instant>,
-    }
-
-    impl Default for Runtime {
-        fn default() -> Self {
-            Runtime {
-                phase: Phase::Decoding,
-                background: None,
-                camera: None,
-                menu: None,
-                textures: None,
-                viewport: (0, 0),
-                escape_held_since: None,
-            }
-        }
-    }
-
-    fn spawn_camera(commands: &mut bevy::ecs::system::Commands) -> bevy::ecs::entity::Entity {
-        commands
-            .spawn((
-                bevy::camera::Camera2d,
-                bevy::camera::Camera {
-                    clear_color: bevy::camera::ClearColorConfig::None,
-                    ..Default::default()
-                },
-            ))
-            .id()
-    }
-
-    fn decode_texture(
-        bytes: &[u8],
-        format: bevy::image::CompressedImageFormats,
-    ) -> Result<bevy::image::Image, String> {
-        bevy::image::ktx2_buffer_to_image(bytes, format, true)
-            .map(|mut image| {
-                image.sampler = bevy::image::ImageSampler::linear();
-                image
-            })
-            .map_err(|error| error.to_string())
-    }
-
-    fn cover_scale(viewport: (u32, u32), texture: bevy::math::Vec2) -> f32 {
-        (viewport.0 as f32 / texture.x).max(viewport.1 as f32 / texture.y)
-    }
-
-    fn slide(eased: f32, width: f32) -> f32 {
-        -width / 2.0 + width * 0.21 / 2.0 - (1.0 - eased) * width * 0.21 * 1.05
-    }
-
-    fn draw_menu(
-        commands: &mut bevy::ecs::system::Commands,
-        menu: &MenuPanel,
-        textures: &Textures,
-        viewport: (u32, u32),
-        eased: f32,
-    ) {
-        let width = viewport.0 as f32;
-        let height = viewport.1 as f32;
-        let menu_width = width * 0.21;
-        let edge_width = (width * 0.0035).max(3.0);
-        let inset_width = (width * 0.0018).max(2.0);
-        let x = slide(eased, width);
-        commands.entity(menu.panel).insert((
-            bevy::sprite::Sprite {
-                image: textures.menu.clone(),
-                custom_size: Some(bevy::math::Vec2::new(menu_width, height)),
-                color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.86 * eased),
-                ..Default::default()
-            },
-            bevy::transform::components::Transform::from_xyz(x, 0.0, 1.0),
-        ));
-        commands.entity(menu.edge).insert((
-            bevy::sprite::Sprite::from_color(
-                bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92 * eased),
-                bevy::math::Vec2::new(edge_width, height),
-            ),
-            bevy::transform::components::Transform::from_xyz(
-                x + menu_width / 2.0 - edge_width / 2.0,
-                0.0,
-                2.0,
-            ),
-        ));
-        commands.entity(menu.inset).insert((
-            bevy::sprite::Sprite::from_color(
-                bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75 * eased),
-                bevy::math::Vec2::new(inset_width, height),
-            ),
-            bevy::transform::components::Transform::from_xyz(
-                x + menu_width / 2.0 - edge_width - 10.0 - inset_width / 2.0,
-                0.0,
-                2.0,
-            ),
-        ));
-    }
-
-    fn frame(
-        mut commands: bevy::ecs::system::Commands,
-        mut windows: bevy::ecs::system::Query<&mut bevy::window::Window>,
-        mut images: bevy::ecs::system::ResMut<bevy::asset::Assets<bevy::image::Image>>,
-        input: bevy::ecs::system::Res<bevy::input::ButtonInput<bevy::input::keyboard::KeyCode>>,
-        support: Option<bevy::ecs::system::Res<bevy::image::CompressedImageFormatSupport>>,
-        mut winit: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>,
-        mut app: bevy::ecs::system::Local<Runtime>,
-    ) {
-        let app: &mut Runtime = &mut *app;
-        let now = std::time::Instant::now();
-        let mut window = windows.single_mut().expect("primary window");
-
-        if window.mode
-            != bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
-        {
-            window.mode =
-                bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
-        }
-        if window.decorations {
-            window.decorations = false;
-        }
-        if window.resizable {
-            window.resizable = false;
-        }
-
-        let size = (window.physical_width(), window.physical_height());
-
-        if let Some(textures) = app.textures.as_ref() {
-            if size != app.viewport {
-                app.viewport = size;
-                if let Some(background) = app.background {
-                    commands.entity(background).insert(
-                        bevy::transform::components::Transform::from_scale(bevy::math::Vec3::splat(
-                            cover_scale(size, textures.background_size),
-                        )),
-                    );
-                }
-                if app.camera.is_none() {
-                    app.camera = Some(spawn_camera(&mut commands));
-                }
-                if let Some(menu) = app.menu.take() {
-                    commands.entity(menu.panel).despawn();
-                    commands.entity(menu.edge).despawn();
-                    commands.entity(menu.inset).despawn();
-                }
-                winit.focused_mode = bevy::winit::UpdateMode::Continuous;
-                app.phase = Phase::Awake {
-                    sleep_at: Some(now + std::time::Duration::from_millis(500)),
-                };
-            }
-        }
-
-        match app.phase {
-            Phase::Decoding => {
-                if let Some(supported) = support.as_deref() {
-                    let format = supported.0;
-                    let decoded = decode_texture(include_bytes!("../assets/000.ktx2"), format)
-                        .and_then(|background| {
-                            decode_texture(include_bytes!("../assets/menu.ktx2"), format)
-                                .map(|menu| (background, menu))
-                        });
-                    match decoded {
-                        Ok((background, menu)) => {
-                            let background_size = bevy::math::Vec2::new(
-                                background.width() as f32,
-                                background.height() as f32,
-                            );
-                            let menu_handle = images.add(menu);
-                            let background_handle = images.add(background);
-                            app.background = Some(
-                                commands
-                                    .spawn((
-                                        bevy::sprite::Sprite {
-                                            image: background_handle,
-                                            custom_size: Some(background_size),
-                                            ..Default::default()
-                                        },
-                                        bevy::transform::components::Transform::from_scale(
-                                            bevy::math::Vec3::splat(cover_scale(
-                                                size,
-                                                background_size,
-                                            )),
-                                        ),
-                                    ))
-                                    .id(),
-                            );
-                            app.camera = Some(spawn_camera(&mut commands));
-                            window.visible = true;
-                            app.textures = Some(Textures {
-                                background_size,
-                                menu: menu_handle,
-                            });
-                            app.viewport = size;
-                            app.phase = Phase::Awake {
-                                sleep_at: Some(now + std::time::Duration::from_millis(500)),
-                            };
-                        }
-                        Err(error) => {
-                            eprintln!("arxumbra: {error}");
-                            commands.write_message(bevy::app::AppExit::error());
-                            app.phase = Phase::Failed;
-                        }
-                    }
-                }
-            }
-            Phase::Awake {
-                sleep_at: Some(sleep_at),
-            } if sleep_at <= now => {
-                if let Some(camera) = app.camera.take() {
-                    commands.entity(camera).despawn();
-                }
-                *winit = bevy::winit::WinitSettings::desktop_app();
-                app.phase = Phase::Sleeping;
-            }
-            Phase::Awake { .. } | Phase::Sleeping | Phase::Failed => {}
-        }
-
-        if input.just_pressed(bevy::input::keyboard::KeyCode::F1) {
-            if let Some(menu) = app.menu.as_mut() {
-                menu.animation = match menu.animation {
-                    Some(Direction::Opening) | None => Some(Direction::Closing),
-                    Some(Direction::Closing) => Some(Direction::Opening),
-                };
-            } else if app.textures.is_some() {
-                if app.camera.is_none() {
-                    app.camera = Some(spawn_camera(&mut commands));
-                }
-                let width = app.viewport.0 as f32;
-                let menu_width = width * 0.21;
-                let edge_width = (width * 0.0035).max(3.0);
-                let inset_width = (width * 0.0018).max(2.0);
-                let closed = slide(0.0, width);
-                app.menu = Some(MenuPanel {
-                    panel: commands
-                        .spawn(bevy::transform::components::Transform::from_xyz(
-                            closed, 0.0, 1.0,
-                        ))
-                        .id(),
-                    edge: commands
-                        .spawn(bevy::transform::components::Transform::from_xyz(
-                            closed + menu_width / 2.0 - edge_width / 2.0,
-                            0.0,
-                            2.0,
-                        ))
-                        .id(),
-                    inset: commands
-                        .spawn(bevy::transform::components::Transform::from_xyz(
-                            closed + menu_width / 2.0 - edge_width - 10.0 - inset_width / 2.0,
-                            0.0,
-                            2.0,
-                        ))
-                        .id(),
-                    progress: 0.0,
-                    animation: Some(Direction::Opening),
-                    stepped_at: now,
-                });
-                winit.focused_mode = bevy::winit::UpdateMode::Continuous;
-                app.phase = Phase::Awake { sleep_at: None };
-            }
-        }
-
-        let mut closing_finished = false;
-        if let (Some(menu), Some(textures)) = (app.menu.as_mut(), app.textures.as_ref()) {
-            if let Some(direction) = menu.animation {
-                let step = (now - menu.stepped_at).as_secs_f32() / 0.25;
-                menu.stepped_at = now;
-                menu.progress = match direction {
-                    Direction::Opening => (menu.progress + step).min(1.0),
-                    Direction::Closing => (menu.progress - step).max(0.0),
-                };
-                let eased = menu.progress * menu.progress * (3.0 - 2.0 * menu.progress);
-                draw_menu(&mut commands, menu, textures, app.viewport, eased);
-                let finished = match direction {
-                    Direction::Opening => menu.progress >= 1.0,
-                    Direction::Closing => menu.progress <= 0.0,
-                };
-                if finished {
-                    match direction {
-                        Direction::Opening => menu.animation = None,
-                        Direction::Closing => {
-                            commands.entity(menu.panel).despawn();
-                            commands.entity(menu.edge).despawn();
-                            commands.entity(menu.inset).despawn();
-                            closing_finished = true;
-                        }
-                    }
-                }
-            }
-        }
-        if closing_finished {
-            app.menu = None;
-            app.phase = Phase::Awake {
-                sleep_at: Some(now + std::time::Duration::from_millis(250)),
-            };
-        }
-
-        if input.just_pressed(bevy::input::keyboard::KeyCode::Escape) {
-            app.escape_held_since = Some(now);
-            winit.focused_mode =
-                bevy::winit::UpdateMode::reactive(std::time::Duration::from_millis(100));
-        }
-        if input.just_released(bevy::input::keyboard::KeyCode::Escape) {
-            app.escape_held_since = None;
-            if app.camera.is_some() {
-                winit.focused_mode = bevy::winit::UpdateMode::Continuous;
-            } else {
-                *winit = bevy::winit::WinitSettings::desktop_app();
-            }
-        }
-        if app
-            .escape_held_since
-            .is_some_and(|pressed_at| now - pressed_at >= std::time::Duration::from_secs(7))
-        {
-            commands.write_message(bevy::app::AppExit::Success);
-        }
-    }
-
+    let mut phase: u8 = 0;
+    let mut background: Option<bevy::ecs::entity::Entity> = None;
+    let mut camera: Option<bevy::ecs::entity::Entity> = None;
+    let mut panel: Option<bevy::ecs::entity::Entity> = None;
+    let mut edge: Option<bevy::ecs::entity::Entity> = None;
+    let mut inset: Option<bevy::ecs::entity::Entity> = None;
+    let mut progress: f32 = 0.0;
+    let mut animation: u8 = 0;
+    let mut stepped_at: std::time::Instant = std::time::Instant::now();
+    let mut menu_image: Option<bevy::asset::Handle<bevy::image::Image>> = None;
+    let mut background_size: bevy::math::Vec2 = bevy::math::Vec2::ZERO;
+    let mut viewport: (u32, u32) = (0, 0);
+    let mut sleep_at: Option<std::time::Instant> = None;
+    let mut escape_held_since: Option<std::time::Instant> = None;
     bevy::app::App::new()
         .insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -408,7 +72,8 @@ fn main() {
                     render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
                         bevy::render::settings::WgpuSettings {
                             backends: Some(bevy::render::settings::Backends::VULKAN),
-                            power_preference: bevy::render::settings::PowerPreference::HighPerformance,
+                            power_preference:
+                                bevy::render::settings::PowerPreference::HighPerformance,
                             ..Default::default()
                         },
                     )),
@@ -422,6 +87,435 @@ fn main() {
                 bevy::sprite_render::SpriteRenderPlugin,
             ),
         ))
-        .add_systems(bevy::app::Update, frame)
+        .add_systems(
+            bevy::app::Update,
+            move |mut commands: bevy::ecs::system::Commands,
+                  mut windows: bevy::ecs::system::Query<&mut bevy::window::Window>,
+                  mut images: bevy::ecs::system::ResMut<
+                bevy::asset::Assets<bevy::image::Image>,
+            >,
+                  input: bevy::ecs::system::Res<
+                bevy::input::ButtonInput<bevy::input::keyboard::KeyCode>,
+            >,
+                  mut winit: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>| {
+                let now = std::time::Instant::now();
+                let mut window = windows.single_mut().expect("primary window");
+                if window.mode
+                    != bevy::window::WindowMode::BorderlessFullscreen(
+                        bevy::window::MonitorSelection::Primary,
+                    )
+                {
+                    window.mode = bevy::window::WindowMode::BorderlessFullscreen(
+                        bevy::window::MonitorSelection::Primary,
+                    );
+                }
+                if window.decorations {
+                    window.decorations = false;
+                }
+                if window.resizable {
+                    window.resizable = false;
+                }
+                let size = (window.physical_width(), window.physical_height());
+                if phase == 0 {
+                    let decoded = (
+                        bevy::image::Image::from_buffer(
+                            include_bytes!("../assets/000.jpg"),
+                            bevy::image::ImageType::Extension("jpg"),
+                            bevy::image::CompressedImageFormats::empty(),
+                            true,
+                            bevy::image::ImageSampler::linear(),
+                            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                        ),
+                        bevy::image::Image::from_buffer(
+                            include_bytes!("../assets/001.jpg"),
+                            bevy::image::ImageType::Extension("jpg"),
+                            bevy::image::CompressedImageFormats::empty(),
+                            true,
+                            bevy::image::ImageSampler::linear(),
+                            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                        ),
+                    );
+                    match decoded {
+                        (Ok(mut background_image), Ok(mut menu_texture)) => {
+                            let panel_target = size.0 as f32 * 0.21;
+                            for (image, target_width, target_height) in [
+                                (&mut background_image, size.0 as f32, size.1 as f32),
+                                (&mut menu_texture, panel_target, size.1 as f32),
+                            ] {
+                                let source_width = image.width();
+                                let source_height = image.height();
+                                let downscale = (target_width / source_width as f32)
+                                    .max(target_height / source_height as f32);
+                                if downscale < 1.0 {
+                                    let target_w =
+                                        ((source_width as f32 * downscale).round().max(1.0)) as u32;
+                                    let target_h =
+                                        ((source_height as f32 * downscale).round().max(1.0))
+                                            as u32;
+                                    let mut current_w = source_width;
+                                    let mut current_h = source_height;
+                                    let mut pixels =
+                                        image.data.take().expect("decoded pixel buffer");
+                                    while current_w >= target_w * 2 && current_h >= target_h * 2 {
+                                        let half_w = current_w / 2;
+                                        let half_h = current_h / 2;
+                                        let mut reduced = vec![0u8; (half_w * half_h * 4) as usize];
+                                        let mut y = 0u32;
+                                        while y < half_h {
+                                            let mut x = 0u32;
+                                            while x < half_w {
+                                                let mut channel = 0usize;
+                                                while channel < 4 {
+                                                    let top_left = pixels[(((y * 2) * current_w)
+                                                        + x * 2)
+                                                        as usize
+                                                        * 4
+                                                        + channel]
+                                                        as u32;
+                                                    let top_right =
+                                                        pixels[(((y * 2) * current_w) + x * 2 + 1)
+                                                            as usize
+                                                            * 4
+                                                            + channel]
+                                                            as u32;
+                                                    let bottom_left =
+                                                        pixels[(((y * 2 + 1) * current_w) + x * 2)
+                                                            as usize
+                                                            * 4
+                                                            + channel]
+                                                            as u32;
+                                                    let bottom_right = pixels[(((y * 2 + 1)
+                                                        * current_w)
+                                                        + x * 2
+                                                        + 1)
+                                                        as usize
+                                                        * 4
+                                                        + channel]
+                                                        as u32;
+                                                    reduced[((y * half_w) + x) as usize * 4
+                                                        + channel] = ((top_left
+                                                        + top_right
+                                                        + bottom_left
+                                                        + bottom_right
+                                                        + 2)
+                                                        / 4)
+                                                        as u8;
+                                                    channel += 1;
+                                                }
+                                                x += 1;
+                                            }
+                                            y += 1;
+                                        }
+                                        pixels = reduced;
+                                        current_w = half_w;
+                                        current_h = half_h;
+                                    }
+                                    let mut resampled =
+                                        vec![0u8; (target_w * target_h * 4) as usize];
+                                    let step_x = current_w as f32 / target_w as f32;
+                                    let step_y = current_h as f32 / target_h as f32;
+                                    let mut y = 0u32;
+                                    while y < target_h {
+                                        let origin_y = ((y as f32 + 0.5) * step_y - 0.5).max(0.0);
+                                        let y0 = origin_y as u32;
+                                        let y1 = (y0 + 1).min(current_h - 1);
+                                        let blend_y = origin_y - y0 as f32;
+                                        let mut x = 0u32;
+                                        while x < target_w {
+                                            let origin_x =
+                                                ((x as f32 + 0.5) * step_x - 0.5).max(0.0);
+                                            let x0 = origin_x as u32;
+                                            let x1 = (x0 + 1).min(current_w - 1);
+                                            let blend_x = origin_x - x0 as f32;
+                                            let mut channel = 0usize;
+                                            while channel < 4 {
+                                                let top_left = pixels
+                                                    [((y0 * current_w) + x0) as usize * 4 + channel]
+                                                    as f32;
+                                                let top_right = pixels
+                                                    [((y0 * current_w) + x1) as usize * 4 + channel]
+                                                    as f32;
+                                                let bottom_left = pixels
+                                                    [((y1 * current_w) + x0) as usize * 4 + channel]
+                                                    as f32;
+                                                let bottom_right = pixels
+                                                    [((y1 * current_w) + x1) as usize * 4 + channel]
+                                                    as f32;
+                                                let top =
+                                                    top_left + (top_right - top_left) * blend_x;
+                                                let bottom = bottom_left
+                                                    + (bottom_right - bottom_left) * blend_x;
+                                                resampled
+                                                    [((y * target_w) + x) as usize * 4 + channel] =
+                                                    (top + (bottom - top) * blend_y)
+                                                        .round()
+                                                        .clamp(0.0, 255.0)
+                                                        as u8;
+                                                channel += 1;
+                                            }
+                                            x += 1;
+                                        }
+                                        y += 1;
+                                    }
+                                    image.data = Some(resampled);
+                                    image.texture_descriptor.size =
+                                        bevy::render::render_resource::Extent3d {
+                                            width: target_w,
+                                            height: target_h,
+                                            depth_or_array_layers: 1,
+                                        };
+                                }
+                            }
+                            background_size = bevy::math::Vec2::new(
+                                background_image.width() as f32,
+                                background_image.height() as f32,
+                            );
+                            let cover = (size.0 as f32 / background_size.x)
+                                .max(size.1 as f32 / background_size.y);
+                            let menu_handle = images.add(menu_texture);
+                            let background_handle = images.add(background_image);
+                            background = Some(
+                                commands
+                                    .spawn((
+                                        bevy::sprite::Sprite {
+                                            image: background_handle,
+                                            custom_size: Some(background_size),
+                                            ..Default::default()
+                                        },
+                                        bevy::transform::components::Transform::from_scale(
+                                            bevy::math::Vec3::splat(cover),
+                                        ),
+                                    ))
+                                    .id(),
+                            );
+                            camera = Some(
+                                commands
+                                    .spawn((
+                                        bevy::camera::Camera2d,
+                                        bevy::camera::Camera {
+                                            clear_color: bevy::camera::ClearColorConfig::None,
+                                            ..Default::default()
+                                        },
+                                    ))
+                                    .id(),
+                            );
+                            window.visible = true;
+                            menu_image = Some(menu_handle);
+                            viewport = size;
+                            phase = 1;
+                            sleep_at = Some(now + std::time::Duration::from_millis(500));
+                        }
+                        (Err(error), _) | (_, Err(error)) => {
+                            eprintln!("arxumbra: {error}");
+                            commands.write_message(bevy::app::AppExit::error());
+                            phase = 3;
+                        }
+                    }
+                }
+                if menu_image.is_some() && size != viewport {
+                    viewport = size;
+                    let cover =
+                        (size.0 as f32 / background_size.x).max(size.1 as f32 / background_size.y);
+                    if let Some(background_entity) = background {
+                        commands.entity(background_entity).insert(
+                            bevy::transform::components::Transform::from_scale(
+                                bevy::math::Vec3::splat(cover),
+                            ),
+                        );
+                    }
+                    if camera.is_none() {
+                        camera = Some(
+                            commands
+                                .spawn((
+                                    bevy::camera::Camera2d,
+                                    bevy::camera::Camera {
+                                        clear_color: bevy::camera::ClearColorConfig::None,
+                                        ..Default::default()
+                                    },
+                                ))
+                                .id(),
+                        );
+                    }
+                    if panel.is_some() {
+                        commands
+                            .entity(panel.take().expect("spawned panel"))
+                            .despawn();
+                        commands
+                            .entity(edge.take().expect("spawned edge"))
+                            .despawn();
+                        commands
+                            .entity(inset.take().expect("spawned inset"))
+                            .despawn();
+                        animation = 0;
+                        progress = 0.0;
+                    }
+                    winit.focused_mode = bevy::winit::UpdateMode::Continuous;
+                    phase = 1;
+                    sleep_at = Some(now + std::time::Duration::from_millis(500));
+                }
+                if phase == 1 {
+                    if let Some(deadline) = sleep_at {
+                        if deadline <= now {
+                            if let Some(camera_entity) = camera.take() {
+                                commands.entity(camera_entity).despawn();
+                            }
+                            *winit = bevy::winit::WinitSettings::desktop_app();
+                            sleep_at = None;
+                            phase = 2;
+                        }
+                    }
+                }
+                if (phase == 1 || phase == 2)
+                    && input.just_pressed(bevy::input::keyboard::KeyCode::F1)
+                {
+                    if panel.is_some() {
+                        if animation == 2 {
+                            animation = 1;
+                        } else {
+                            animation = 2;
+                        }
+                    } else if menu_image.is_some() {
+                        if camera.is_none() {
+                            camera = Some(
+                                commands
+                                    .spawn((
+                                        bevy::camera::Camera2d,
+                                        bevy::camera::Camera {
+                                            clear_color: bevy::camera::ClearColorConfig::None,
+                                            ..Default::default()
+                                        },
+                                    ))
+                                    .id(),
+                            );
+                        }
+                        let width = viewport.0 as f32;
+                        let menu_width = width * 0.21;
+                        let edge_width = (width * 0.0035).max(3.0);
+                        let inset_width = (width * 0.0018).max(2.0);
+                        let closed = -width / 2.0 + width * 0.21 / 2.0 - width * 0.21 * 1.05;
+                        panel = Some(
+                            commands
+                                .spawn(bevy::transform::components::Transform::from_xyz(
+                                    closed, 0.0, 1.0,
+                                ))
+                                .id(),
+                        );
+                        edge = Some(
+                            commands
+                                .spawn(bevy::transform::components::Transform::from_xyz(
+                                    closed + menu_width / 2.0 - edge_width / 2.0,
+                                    0.0,
+                                    2.0,
+                                ))
+                                .id(),
+                        );
+                        inset = Some(
+                            commands
+                                .spawn(bevy::transform::components::Transform::from_xyz(
+                                    closed + menu_width / 2.0
+                                        - edge_width
+                                        - 10.0
+                                        - inset_width / 2.0,
+                                    0.0,
+                                    2.0,
+                                ))
+                                .id(),
+                        );
+                        progress = 0.0;
+                        animation = 1;
+                        stepped_at = now;
+                        winit.focused_mode = bevy::winit::UpdateMode::Continuous;
+                        phase = 1;
+                        sleep_at = None;
+                    }
+                }
+                if animation != 0 {
+                    if let (Some(panel_entity), Some(edge_entity), Some(inset_entity)) =
+                        (panel, edge, inset)
+                    {
+                        if let Some(menu_handle) = menu_image.clone() {
+                            let step = (now - stepped_at).as_secs_f32() / 0.25;
+                            stepped_at = now;
+                            if animation == 1 {
+                                progress = (progress + step).min(1.0);
+                            } else {
+                                progress = (progress - step).max(0.0);
+                            }
+                            let eased = progress * progress * (3.0 - 2.0 * progress);
+                            let width = viewport.0 as f32;
+                            let height = viewport.1 as f32;
+                            let menu_width = width * 0.21;
+                            let edge_width = (width * 0.0035).max(3.0);
+                            let inset_width = (width * 0.0018).max(2.0);
+                            let x = -width / 2.0 + width * 0.21 / 2.0
+                                - (1.0 - eased) * width * 0.21 * 1.05;
+                            commands.entity(panel_entity).insert((
+                                bevy::sprite::Sprite {
+                                    image: menu_handle,
+                                    custom_size: Some(bevy::math::Vec2::new(menu_width, height)),
+                                    color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.86 * eased),
+                                    ..Default::default()
+                                },
+                                bevy::transform::components::Transform::from_xyz(x, 0.0, 1.0),
+                            ));
+                            commands.entity(edge_entity).insert((
+                                bevy::sprite::Sprite::from_color(
+                                    bevy::color::Color::srgba(0.478, 0.635, 0.969, 0.92 * eased),
+                                    bevy::math::Vec2::new(edge_width, height),
+                                ),
+                                bevy::transform::components::Transform::from_xyz(
+                                    x + menu_width / 2.0 - edge_width / 2.0,
+                                    0.0,
+                                    2.0,
+                                ),
+                            ));
+                            commands.entity(inset_entity).insert((
+                                bevy::sprite::Sprite::from_color(
+                                    bevy::color::Color::srgba(0.733, 0.604, 0.969, 0.75 * eased),
+                                    bevy::math::Vec2::new(inset_width, height),
+                                ),
+                                bevy::transform::components::Transform::from_xyz(
+                                    x + menu_width / 2.0 - edge_width - 10.0 - inset_width / 2.0,
+                                    0.0,
+                                    2.0,
+                                ),
+                            ));
+                            if animation == 1 && progress >= 1.0 {
+                                animation = 0;
+                            }
+                            if animation == 2 && progress <= 0.0 {
+                                commands.entity(panel_entity).despawn();
+                                commands.entity(edge_entity).despawn();
+                                commands.entity(inset_entity).despawn();
+                                panel = None;
+                                edge = None;
+                                inset = None;
+                                animation = 0;
+                                phase = 1;
+                                sleep_at = Some(now + std::time::Duration::from_millis(250));
+                            }
+                        }
+                    }
+                }
+                if input.just_pressed(bevy::input::keyboard::KeyCode::Escape) {
+                    escape_held_since = Some(now);
+                    winit.focused_mode =
+                        bevy::winit::UpdateMode::reactive(std::time::Duration::from_millis(100));
+                }
+                if input.just_released(bevy::input::keyboard::KeyCode::Escape) {
+                    escape_held_since = None;
+                    if camera.is_some() {
+                        winit.focused_mode = bevy::winit::UpdateMode::Continuous;
+                    } else {
+                        *winit = bevy::winit::WinitSettings::desktop_app();
+                    }
+                }
+                if let Some(pressed_at) = escape_held_since {
+                    if now - pressed_at >= std::time::Duration::from_secs(7) {
+                        commands.write_message(bevy::app::AppExit::Success);
+                    }
+                }
+            },
+        )
         .run();
 }
