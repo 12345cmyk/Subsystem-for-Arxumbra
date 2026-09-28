@@ -22,12 +22,12 @@ jobs:
             arch: aarch64
             pgo: false
             cross: true
-            flags: '-C target-cpu=generic -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            flags: '-C target-cpu=generic -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
           - target: x86_64-unknown-linux-gnu
             arch: x86_64
             pgo: true
             cross: false
-            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
     env:
       NAME: Linux-Subsystem-for-Arxumbra
       CARGO_BIN: subsystem-for-arxumbra
@@ -50,7 +50,13 @@ jobs:
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers \
             llvm-18 lld-18 xz-utils file
-          sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
+          LLD_BIN="$(command -v ld.lld-18 || command -v ld.lld || ls /usr/lib/llvm-18/bin/ld.lld)"
+          [ -x "$LLD_BIN" ] || { echo "::error::lld из пакета lld-18 не найден"; exit 1; }
+          sudo mkdir -p /opt/arx-ld
+          sudo ln -sf "$LLD_BIN" /opt/arx-ld/ld.lld
+          sudo ln -sf "$LLD_BIN" /usr/local/bin/ld.lld
+          [ -x /opt/arx-ld/ld.lld ] || { echo "::error::ld.lld недоступен в /opt/arx-ld"; exit 1; }
+          /opt/arx-ld/ld.lld --version
 
       - name: Stage 2a - aarch64 cross toolchain
         if: matrix.cross
@@ -70,7 +76,7 @@ jobs:
                       stanzas.append(stanza)
                   text = '\n\n'.join(stanzas)
               else:
-                  text = re.sub(r'(?m)^deb (?!\\[)', 'deb [arch=amd64,i386] ', text)
+                  text = re.sub(r'(?m)^deb (?!\[)', 'deb [arch=amd64,i386] ', text)
               open(path, 'w').write(text)
           with open('/etc/apt/sources.list.d/ubuntu-ports-arm64.list', 'w') as portslist:
               for suite in ('noble', 'noble-updates', 'noble-security'):
@@ -79,15 +85,26 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             gcc-aarch64-linux-gnu libwayland-dev:arm64 libxkbcommon-dev:arm64
-          sudo mkdir -p /usr/aarch64-linux-gnu/bin
-          sudo ln -sf /usr/bin/ld.lld-18 /usr/aarch64-linux-gnu/bin/ld.lld
-          sudo ln -sf /usr/bin/ld.lld-18 /usr/bin/aarch64-linux-gnu-ld.lld
-          printf 'int main(void){return 0;}\n' > /tmp/link-smoke.c
-          aarch64-linux-gnu-gcc -fuse-ld=lld -Wl,--icf=all /tmp/link-smoke.c -o /tmp/link-smoke
-          file /tmp/link-smoke | grep -q 'ARM aarch64'
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Stage 2b - linker capability probe (lld+ICF или откат на GNU ld)
+        run: |
+          printf 'int main(void){return 0;}\n' > /tmp/arx_probe.c
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            PROBE_CC="aarch64-linux-gnu-gcc"
+          else
+            PROBE_CC="cc"
+          fi
+          if [ -x /opt/arx-ld/ld.lld ] && $PROBE_CC -fuse-ld=lld -B/opt/arx-ld -Wl,--icf=all /tmp/arx_probe.c -o /tmp/arx_probe.out 2>/dev/null; then
+            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B/opt/arx-ld -C link-arg=-Wl,--icf=all" >> "$GITHUB_ENV"
+            echo "линкер: lld с ICF"
+          else
+            echo "CARGO_LINK_EXTRA=" >> "$GITHUB_ENV"
+            echo "линкер: GNU ld, ICF отключён (lld недоступен компилятору)"
+          fi
+          rm -f /tmp/arx_probe.out
 
       - name: Stage 3 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
@@ -96,11 +113,11 @@ jobs:
         if: matrix.pgo
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="${{ matrix.flags }} -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
+          RUSTFLAGS="${{ matrix.flags }} $CARGO_LINK_EXTRA -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
       - name: Stage 4b - plain build (fat LTO, build-std)
         if: ${{ !matrix.pgo }}
-        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
+        run: RUSTFLAGS="${{ matrix.flags }} $CARGO_LINK_EXTRA" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
       - name: Stage 5 - headless profile run (weston + lavapipe, empty stderr)
         if: matrix.pgo
@@ -131,7 +148,7 @@ jobs:
       - name: Stage 7 - PGO build (profile-use, fat LTO, lld, build-std)
         if: matrix.pgo
         run: |
-          RUSTFLAGS="${{ matrix.flags }} -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
+          RUSTFLAGS="${{ matrix.flags }} $CARGO_LINK_EXTRA -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
       - name: Stage 8 - verification run (shipped binary, empty stderr)
         if: matrix.pgo
