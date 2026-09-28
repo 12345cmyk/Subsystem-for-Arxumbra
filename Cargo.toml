@@ -1,13 +1,13 @@
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2024"
 
 [[bin]]
 name = "subsystem-for-arxumbra"
 path = "src/main.rs"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 basisu = "0.1"
 mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
@@ -25,7 +25,25 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "wayland",
 ] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+basisu = "0.1"
+mimalloc = "0.1"
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "keyboard",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_input_focus",
+    "bevy_core_pipeline",
+    "bevy_asset",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_sprite_render",
+    "wayland",
+] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 basisu = "0.1"
 mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
@@ -42,7 +60,41 @@ bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-fe
     "bevy_sprite_render",
 ] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+basisu = "0.1"
+mimalloc = "0.1"
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "keyboard",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_input_focus",
+    "bevy_core_pipeline",
+    "bevy_asset",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_sprite_render",
+] }
+
+[target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
+basisu = "0.1"
+mimalloc = "0.1"
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
+    "std",
+    "multi_threaded",
+    "keyboard",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_input_focus",
+    "bevy_core_pipeline",
+    "bevy_asset",
+    "bevy_image",
+    "bevy_sprite",
+    "bevy_sprite_render",
+] }
+
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64"))'.dependencies]
 basisu = "0.1"
 mimalloc = "0.1"
 bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.19.1", default-features = false, features = [
