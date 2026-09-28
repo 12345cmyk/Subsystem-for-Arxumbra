@@ -9,74 +9,105 @@ on:
 permissions:
   contents: write
 
-env:
-  BIN: subsystem-for-arxumbra
-  X86_BASE: "-Ctarget-cpu=x86-64 -Ctarget-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha"
-
 jobs:
   Linux-Subsystem-for-Arxumbra:
+    name: Linux-Subsystem-for-Arxumbra-${{ matrix.arch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            pgo: false
+            cross: true
+            flags: '-C target-cpu=generic -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+          - target: x86_64-unknown-linux-gnu
+            arch: x86_64
+            pgo: true
+            cross: false
+            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+    env:
+      BINARY: Linux-Subsystem-for-Arxumbra
+      CARGO_BIN: subsystem-for-arxumbra
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - name: Rust toolchain
+      - name: Stage 1 - Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup component add llvm-tools
-          rustup target add aarch64-unknown-linux-gnu
+          rustup target add ${{ matrix.target }}
 
-      - name: System dependencies (wayland, weston, lavapipe, llvm-18, lld, aarch64 cross)
+      - name: Stage 2 - system dependencies
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers \
-            llvm-18 lld-18 xz-utils gcc-aarch64-linux-gnu
+            llvm-18 lld-18 xz-utils
           sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
+
+      - name: Stage 2a - aarch64 cross toolchain
+        if: matrix.cross
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu
           sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev:arm64 libxkbcommon-dev:arm64
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
 
-      - name: Stage 1 - locked dependency fetch
-        run: cargo fetch --locked
+      - name: Stage 3 - locked dependency fetch
+        run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO, x86_64)
+      - name: Stage 4a - instrumented build (PGO generate, fat LTO)
+        if: matrix.pgo
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="$X86_BASE -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+          RUSTFLAGS="${{ matrix.flags }} -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage 3 - headless profile run (weston + lavapipe, SIGINT = graceful exit, empty stderr)
+      - name: Stage 4b - plain build (fat LTO)
+        if: ${{ !matrix.pgo }}
+        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Stage 5 - headless profile run (weston + lavapipe, empty stderr)
+        if: matrix.pgo
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
-          weston --backend=headless-backend.so --socket=arx-smoke --idle-time=0 &
-          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-smoke" ] && break; sleep 1; done
-          [ -e "$XDG_RUNTIME_DIR/arx-smoke" ] || { echo "::error::weston не поднялся"; exit 1; }
-          export WAYLAND_DISPLAY=arx-smoke
+          weston --backend=headless-backend.so --socket=arx-profile --idle-time=0 &
+          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-profile" ] && break; sleep 1; done
+          [ -e "$XDG_RUNTIME_DIR/arx-profile" ] || { echo "::error::weston не поднялся"; exit 1; }
+          export WAYLAND_DISPLAY=arx-profile
           export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
           export WGPU_BACKEND=vulkan
           export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
-          timeout -s INT 25 target/release/$BIN 2>/tmp/smoke.err || true
-          if grep -v "^LLVM Profile Warning:" /tmp/smoke.err | grep -q .; then
-            echo "::error::Smoke-прогон написал в stderr:"
-            cat /tmp/smoke.err
+          timeout -s INT 25 target/${{ matrix.target }}/release/$CARGO_BIN 2>/tmp/profile.err || true
+          if grep -v "^LLVM Profile Warning:" /tmp/profile.err | grep -q .; then
+            echo "::error::Профильный прогон написал в stderr:"
+            cat /tmp/profile.err
             exit 1
           fi
           [ -s pgo-profile/default.profraw ] || { echo "::error::профиль PGO не собран"; exit 1; }
 
-      - name: Stage 4 - merge PGO profile
+      - name: Stage 6 - merge PGO profile
+        if: matrix.pgo
         run: |
           PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
           [ -x "$PROFDATA" ] || { echo "::error::llvm-profdata из sysroot не найден"; exit 1; }
           "$PROFDATA" merge -o pgo.profdata pgo-profile/
 
-      - name: Stage 5 - PGO build (profile-use, fat LTO, lld, x86_64)
+      - name: Stage 7 - PGO build (profile-use, fat LTO, lld)
+        if: matrix.pgo
         run: |
-          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro" cargo build --release --locked
+          RUSTFLAGS="${{ matrix.flags }} -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld" cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage 6 - verification run (shipped PGO binary, empty stderr)
+      - name: Stage 8 - verification run (shipped binary, empty stderr)
+        if: matrix.pgo
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
           weston --backend=headless-backend.so --socket=arx-verify --idle-time=0 &
@@ -85,190 +116,152 @@ jobs:
           export WAYLAND_DISPLAY=arx-verify
           export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
           export WGPU_BACKEND=vulkan
-          timeout -s INT 25 target/release/$BIN 2>/tmp/verify.err || true
+          timeout -s INT 25 target/${{ matrix.target }}/release/$CARGO_BIN 2>/tmp/verify.err || true
           if [ -s /tmp/verify.err ]; then
-            echo "::error::Верификация PGO-бинаря написала в stderr:"
+            echo "::error::Верификация написала в stderr:"
             cat /tmp/verify.err
             exit 1
           fi
 
-      - name: Stage 7 - aarch64 cross build (fat LTO)
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          PKG_CONFIG_ALLOW_CROSS: 1
-          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
-        run: cargo build --release --locked --target aarch64-unknown-linux-gnu
-
-      - name: Stage 8 - package
+      - name: Stage 9 - package
         run: |
           mkdir dist
-          cp target/release/$BIN dist/Linux-Subsystem-for-Arxumbra
-          tar cJf dist/Linux-Subsystem-for-Arxumbra-linux-x86_64.tar.xz -C dist Linux-Subsystem-for-Arxumbra
-          rm dist/Linux-Subsystem-for-Arxumbra
-          cp target/aarch64-unknown-linux-gnu/release/$BIN dist/Linux-Subsystem-for-Arxumbra
-          tar cJf dist/Linux-Subsystem-for-Arxumbra-linux-aarch64.tar.xz -C dist Linux-Subsystem-for-Arxumbra
-          rm dist/Linux-Subsystem-for-Arxumbra
-          sha256sum dist/*.tar.xz > dist/SHA256SUMS.txt
+          cp target/${{ matrix.target }}/release/$CARGO_BIN dist/$BINARY
+          chmod 755 dist/$BINARY
+          tar cf - -C dist "$BINARY" | xz -9e -T0 -c > "dist/$BINARY-linux-${{ matrix.arch }}.tar.xz"
+          rm dist/$BINARY
+          sha256sum dist/*.tar.xz > "dist/SHA256SUMS-${{ matrix.arch }}.txt"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
-          name: Linux-Subsystem-for-Arxumbra
+          name: ${{ env.BINARY }}-${{ matrix.arch }}
           path: dist/*
 
   macOS-Subsystem-for-Arxumbra:
+    name: macOS-Subsystem-for-Arxumbra-${{ matrix.arch }}
     runs-on: macos-15
-    timeout-minutes: 360
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+            flags: '-C target-cpu=apple-m1 -C link-arg=-Wl,-dead_strip -C link-arg=-Wl,-no_fixup_chains -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+          - target: x86_64-apple-darwin
+            arch: x86_64
+            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-Wl,-dead_strip -C link-arg=-Wl,-no_fixup_chains -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+    env:
+      BINARY: macOS-Subsystem-for-Arxumbra
+      CARGO_BIN: subsystem-for-arxumbra
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - name: Rust toolchain
+      - name: Stage 1 - Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          rustup component add llvm-tools
-          rustup target add aarch64-apple-darwin
-          rustup target add x86_64-apple-darwin
+          rustup target add ${{ matrix.target }}
 
-      - name: Stage 1 - locked dependency fetch
-        run: cargo fetch --locked
+      - name: Stage 2 - locked dependency fetch
+        run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO, aarch64)
-        run: |
-          mkdir -p pgo-profile
-          RUSTFLAGS="-Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target aarch64-apple-darwin
+      - name: Stage 3 - build (fat LTO)
+        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage 3 - profile run (SIGINT = graceful exit, best effort)
-        run: |
-          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
-          ./target/aarch64-apple-darwin/release/$BIN 2>/dev/null &
-          APP_PID=$!
-          sleep 25
-          kill -INT $APP_PID 2>/dev/null || true
-          wait $APP_PID 2>/dev/null || true
-          exit 0
-
-      - name: Stage 4 - PGO build or fallback (fat LTO, aarch64)
-        run: |
-          PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
-          if [ -s pgo-profile/default.profraw ] && [ -n "$PROFDATA" ]; then
-            "$PROFDATA" merge -o pgo.profdata pgo-profile/
-            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked --target aarch64-apple-darwin
-          else
-            echo "профиль недоступен, собираю чистый fat LTO релиз"
-            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked --target aarch64-apple-darwin
-          fi
-
-      - name: Stage 5 - x86_64 build (fat LTO)
-        run: |
-          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked --target x86_64-apple-darwin
-
-      - name: Stage 6 - package
+      - name: Stage 4 - package
         run: |
           mkdir dist
-          cp target/aarch64-apple-darwin/release/$BIN dist/macOS-Subsystem-for-Arxumbra
-          tar czf dist/macOS-Subsystem-for-Arxumbra-macos-aarch64.tar.gz -C dist macOS-Subsystem-for-Arxumbra
-          rm dist/macOS-Subsystem-for-Arxumbra
-          cp target/x86_64-apple-darwin/release/$BIN dist/macOS-Subsystem-for-Arxumbra
-          tar czf dist/macOS-Subsystem-for-Arxumbra-macos-x86_64.tar.gz -C dist macOS-Subsystem-for-Arxumbra
-          rm dist/macOS-Subsystem-for-Arxumbra
-          shasum -a 256 dist/*.tar.gz > dist/SHA256SUMS.txt
+          cp target/${{ matrix.target }}/release/$CARGO_BIN dist/$BINARY
+          chmod 755 dist/$BINARY
+          tar czf "dist/$BINARY-macos-${{ matrix.arch }}.tar.gz" -C dist "$BINARY"
+          rm dist/$BINARY
+          shasum -a 256 dist/*.tar.gz > "dist/SHA256SUMS-${{ matrix.arch }}.txt"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
-          name: macOS-Subsystem-for-Arxumbra
+          name: ${{ env.BINARY }}-${{ matrix.arch }}
           path: dist/*
 
   Windows-Subsystem-for-Arxumbra:
+    name: Windows-Subsystem-for-Arxumbra-${{ matrix.arch }}
     runs-on: windows-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-pc-windows-msvc
+            arch: aarch64
+            xwin: true
+            flags: '-C target-cpu=generic -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+          - target: x86_64-pc-windows-msvc
+            arch: x86_64
+            xwin: false
+            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+    env:
+      BINARY: Windows-Subsystem-for-Arxumbra
+      CARGO_BIN: subsystem-for-arxumbra
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - name: Rust toolchain
+      - name: Stage 1 - Rust toolchain
         run: |
           rustup toolchain install stable-msvc --profile minimal
           rustup default stable-msvc
-          rustup component add llvm-tools
-          rustup target add x86_64-pc-windows-msvc
-          rustup target add aarch64-pc-windows-msvc
+          rustup target add ${{ matrix.target }}
 
-      - name: Stage 1 - locked dependency fetch
-        run: cargo fetch --locked
+      - name: Stage 2 - locked dependency fetch
+        run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO, x86_64)
-        shell: pwsh
+      - name: Stage 3a - build x86_64 (fat LTO)
+        if: ${{ !matrix.xwin }}
         run: |
-          New-Item -ItemType Directory -Force pgo-profile | Out-Null
-          $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
-          cargo build --release --locked --target x86_64-pc-windows-msvc
+          $env:RUSTFLAGS = "${{ matrix.flags }}"
+          cargo build --release --locked --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 3 - profile run (best effort)
-        shell: pwsh
-        run: |
-          $env:LLVM_PROFILE_FILE = "$env:GITHUB_WORKSPACE\pgo-profile\default.profraw"
-          $proc = Start-Process -FilePath "target\x86_64-pc-windows-msvc\release\$env:BIN.exe" -PassThru -RedirectStandardError smoke.err -ErrorAction SilentlyContinue
-          if ($proc) {
-            Start-Sleep -Seconds 25
-            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
-          }
-          exit 0
-
-      - name: Stage 4 - PGO build or fallback (fat LTO, x86_64)
-        shell: pwsh
-        run: |
-          $sysroot = (rustc --print sysroot)
-          $profdata = Get-ChildItem -Path "$sysroot\lib\rustlib" -Recurse -Filter "llvm-profdata.exe" | Select-Object -First 1
-          $profileRaw = "$env:GITHUB_WORKSPACE\pgo-profile\default.profraw"
-          if ((Test-Path $profileRaw) -and (Get-Item $profileRaw).Length -gt 0 -and $profdata) {
-            & $profdata.FullName merge -o pgo.profdata "$env:GITHUB_WORKSPACE\pgo-profile"
-            $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-use=$env:GITHUB_WORKSPACE\pgo.profdata"
-          } else {
-            Write-Output "профиль недоступен, собираю чистый fat LTO релиз"
-            $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF"
-          }
-          cargo build --release --locked --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Stage 5 - aarch64 build (fat LTO, MSVC ARM64 через xwin)
-        shell: pwsh
+      - name: Stage 3b - build aarch64 (fat LTO, MSVC ARM64 через xwin)
+        if: matrix.xwin
         run: |
           cargo install cargo-xwin --locked
-          $env:XWIN_ARCH = "aarch64"
-          cargo xwin build --release --locked --target aarch64-pc-windows-msvc
+          $env:RUSTFLAGS = "${{ matrix.flags }}"
+          cargo xwin build --release --locked --target ${{ matrix.target }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 6 - package
+      - name: Stage 4 - package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target\x86_64-pc-windows-msvc\release\$env:BIN.exe" "dist\Windows-Subsystem-for-Arxumbra.exe"
-          Compress-Archive -Path "dist\Windows-Subsystem-for-Arxumbra.exe" -DestinationPath "dist\Windows-Subsystem-for-Arxumbra-windows-x86_64.zip"
-          Remove-Item "dist\Windows-Subsystem-for-Arxumbra.exe"
-          Copy-Item "target\aarch64-pc-windows-msvc\release\$env:BIN.exe" "dist\Windows-Subsystem-for-Arxumbra.exe"
-          Compress-Archive -Path "dist\Windows-Subsystem-for-Arxumbra.exe" -DestinationPath "dist\Windows-Subsystem-for-Arxumbra-windows-aarch64.zip"
-          Remove-Item "dist\Windows-Subsystem-for-Arxumbra.exe"
-          (Get-ChildItem "dist\*.zip" | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name }) | Out-File -Encoding ascii "dist\SHA256SUMS.txt"
+          Copy-Item "target\${{ matrix.target }}\release\$env:CARGO_BIN.exe" "dist\$env:BINARY.exe"
+          Compress-Archive -Path "dist\$env:BINARY.exe" -DestinationPath "dist\$env:BINARY-windows-${{ matrix.arch }}.zip" -CompressionLevel Optimal
+          Remove-Item "dist\$env:BINARY.exe"
+          (Get-ChildItem "dist\*.zip" | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name }) | Out-File -Encoding ascii "dist\SHA256SUMS-${{ matrix.arch }}.txt"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
-          name: Windows-Subsystem-for-Arxumbra
+          name: ${{ env.BINARY }}-${{ matrix.arch }}
           path: dist/*
 
   release:
-    needs: [Linux-Subsystem-for-Arxumbra, macOS-Subsystem-for-Arxumbra, Windows-Subsystem-for-Arxumbra]
+    name: Release
+    needs:
+      - Linux-Subsystem-for-Arxumbra
+      - macOS-Subsystem-for-Arxumbra
+      - Windows-Subsystem-for-Arxumbra
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           path: dist
 
       - name: GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: |
-            dist/Linux-Subsystem-for-Arxumbra/*
-            dist/macOS-Subsystem-for-Arxumbra/*
-            dist/Windows-Subsystem-for-Arxumbra/*
+            dist/*/*.tar.xz
+            dist/*/*.tar.gz
+            dist/*/*.zip
+            dist/*/SHA256SUMS-*.txt
           generate_release_notes: true
