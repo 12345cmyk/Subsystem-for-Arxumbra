@@ -5,152 +5,36 @@
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
-    let (background_image, menu_image, cursor_image) = std::thread::scope(|scope| {
-        let menu_thread = scope.spawn(|| {
-            let transcoder = basisu::Transcoder::new(&include_bytes!("../assets/001.ktx2")[..])
-                .expect("menu ktx2 container");
-            let (source_width, source_height) = transcoder.base_dimensions();
-            let level_count = transcoder.level_count();
-            let mut pixels: Vec<u8> = Vec::new();
-            let mut level = 0u32;
-            while level < level_count {
-                pixels.extend_from_slice(
-                    &transcoder
-                        .transcode(level, basisu::TargetFormat::Bc7Rgba, basisu::DecodeFlags::NONE)
-                        .expect("menu ktx2 bc7 transcode"),
-                );
-                level += 1;
-            }
-            let mut image = bevy::image::Image::new(
-                bevy::render::render_resource::Extent3d {
-                    width: source_width,
-                    height: source_height,
-                    depth_or_array_layers: 1,
-                },
-                bevy::render::render_resource::TextureDimension::D2,
-                pixels,
-                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-                bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            );
-            image.texture_descriptor.mip_level_count = level_count;
-            image.sampler = bevy::image::ImageSampler::Descriptor(
-                bevy::render::render_resource::SamplerDescriptor {
-                    address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
-                    min_filter: bevy::render::render_resource::FilterMode::Linear,
-                    mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                    ..Default::default()
-                }
-                .into(),
-            );
-            image
-        });
-        let cursor_thread = scope.spawn(|| {
-            let transcoder = basisu::Transcoder::new(&include_bytes!("../assets/cursor.ktx2")[..])
-                .expect("cursor ktx2 container");
-            let (source_width, source_height) = transcoder.base_dimensions();
-            let level_count = transcoder.level_count();
-            let mut pixels: Vec<u8> = Vec::new();
-            let mut level = 0u32;
-            while level < level_count {
-                pixels.extend_from_slice(
-                    &transcoder
-                        .transcode(level, basisu::TargetFormat::Bc7Rgba, basisu::DecodeFlags::NONE)
-                        .expect("cursor ktx2 bc7 transcode"),
-                );
-                level += 1;
-            }
-            let mut image = bevy::image::Image::new(
-                bevy::render::render_resource::Extent3d {
-                    width: source_width,
-                    height: source_height,
-                    depth_or_array_layers: 1,
-                },
-                bevy::render::render_resource::TextureDimension::D2,
-                pixels,
-                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-                bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            );
-            image.texture_descriptor.mip_level_count = level_count;
-            image.sampler = bevy::image::ImageSampler::Descriptor(
-                bevy::render::render_resource::SamplerDescriptor {
-                    address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
-                    min_filter: bevy::render::render_resource::FilterMode::Linear,
-                    mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                    ..Default::default()
-                }
-                .into(),
-            );
-            image
-        });
-        let background_image = {
-            let transcoder = basisu::Transcoder::new(&include_bytes!("../assets/000.ktx2")[..])
-                .expect("background ktx2 container");
-            let (source_width, source_height) = transcoder.base_dimensions();
-            let level_count = transcoder.level_count();
-            let mut pixels: Vec<u8> = Vec::new();
-            let mut level = 0u32;
-            while level < level_count {
-                pixels.extend_from_slice(
-                    &transcoder
-                        .transcode(level, basisu::TargetFormat::Bc7Rgba, basisu::DecodeFlags::NONE)
-                        .expect("background ktx2 bc7 transcode"),
-                );
-                level += 1;
-            }
-            let mut image = bevy::image::Image::new(
-                bevy::render::render_resource::Extent3d {
-                    width: source_width,
-                    height: source_height,
-                    depth_or_array_layers: 1,
-                },
-                bevy::render::render_resource::TextureDimension::D2,
-                pixels,
-                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-                bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            );
-            image.texture_descriptor.mip_level_count = level_count;
-            image.sampler = bevy::image::ImageSampler::Descriptor(
-                bevy::render::render_resource::SamplerDescriptor {
-                    address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
-                    min_filter: bevy::render::render_resource::FilterMode::Linear,
-                    mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                    ..Default::default()
-                }
-                .into(),
-            );
-            image
-        };
-        (
-            background_image,
-            menu_thread.join().expect("menu ktx2 decode"),
-            cursor_thread.join().expect("cursor ktx2 decode"),
-        )
-    });
+    let background_bytes: &[u8] = include_bytes!("../assets/000.ktx2");
+    let menu_bytes: &[u8] = include_bytes!("../assets/001.ktx2");
+    let cursor_bytes: &[u8] = include_bytes!("../assets/cursor.ktx2");
+    let background_transcoder =
+        basisu::Transcoder::new(background_bytes).expect("background ktx2 container");
+    let menu_transcoder = basisu::Transcoder::new(menu_bytes).expect("menu ktx2 container");
+    let cursor_transcoder = basisu::Transcoder::new(cursor_bytes).expect("cursor ktx2 container");
+    let (background_source_width, background_source_height) = background_transcoder.base_dimensions();
+    let (menu_source_width, menu_source_height) = menu_transcoder.base_dimensions();
+    let (cursor_source_width, cursor_source_height) = cursor_transcoder.base_dimensions();
+    let background_level_count = background_transcoder.level_count();
+    let menu_level_count = menu_transcoder.level_count();
+    let cursor_level_count = cursor_transcoder.level_count();
     let background_size = bevy::math::Vec2::new(
-        background_image.width() as f32,
-        background_image.height() as f32,
+        background_source_width as f32,
+        background_source_height as f32,
     );
-    let mut background_asset = Some(background_image);
-    let mut menu_asset = Some(menu_image);
-    let mut cursor_asset = Some(cursor_image);
     let mut phase: u8 = 0;
     let mut background: Option<bevy::ecs::entity::Entity> = None;
     let mut panel: Option<bevy::ecs::entity::Entity> = None;
     let mut cursor: Option<bevy::ecs::entity::Entity> = None;
     let mut menu_texture: Option<bevy::asset::Handle<bevy::image::Image>> = None;
     let mut viewport: (u32, u32) = (0, 0);
+    let mut background_level: u32 = u32::MAX;
+    let mut menu_level: u32 = u32::MAX;
+    let mut cursor_level: u32 = u32::MAX;
     let mut panel_open = false;
     let mut panel_progress: f32 = 0.0;
     let mut panel_animation: u8 = 0;
+    let mut panel_drawn = false;
     let mut cursor_position = bevy::math::Vec2::ZERO;
     let mut cursor_velocity = bevy::math::Vec2::ZERO;
     let mut idle_at: Option<std::time::Instant> = None;
@@ -216,6 +100,7 @@ fn main() {
                             backends: Some(backends),
                             power_preference:
                                 bevy::render::settings::PowerPreference::HighPerformance,
+                            memory_hints: bevy::render::settings::MemoryHints::Performance,
                             ..Default::default()
                         },
                     )),
@@ -237,6 +122,7 @@ fn main() {
                 (
                     &mut bevy::transform::components::Transform,
                     &mut bevy::sprite::Sprite,
+                    &mut bevy::camera::visibility::Visibility,
                 ),
                 bevy::ecs::query::Without<bevy::camera::Camera2d>,
             >,
@@ -270,82 +156,6 @@ fn main() {
                 if size.0 == 0 || size.1 == 0 {
                     return;
                 }
-                if phase == 0 {
-                    let width = size.0 as f32;
-                    let height = size.1 as f32;
-                    let cover =
-                        (width / background_size.x).max(height / background_size.y);
-                    let panel_width = width * 0.21;
-                    let menu_handle = images.add(menu_asset.take().expect("menu texture"));
-                    let background_handle =
-                        images.add(background_asset.take().expect("background texture"));
-                    let cursor_handle =
-                        images.add(cursor_asset.take().expect("cursor texture"));
-                    background = Some(
-                        commands
-                            .spawn((
-                                bevy::sprite::Sprite {
-                                    image: background_handle,
-                                    custom_size: Some(background_size),
-                                    color: bevy::color::Color::WHITE,
-                                    ..Default::default()
-                                },
-                                bevy::transform::components::Transform::from_scale(
-                                    bevy::math::Vec3::splat(cover),
-                                ),
-                            ))
-                            .id(),
-                    );
-                    commands.spawn((
-                        bevy::camera::Camera2d,
-                        bevy::camera::Camera {
-                            clear_color: bevy::camera::ClearColorConfig::None,
-                            ..Default::default()
-                        },
-                    ));
-                    panel = Some(
-                        commands
-                            .spawn((
-                                bevy::sprite::Sprite {
-                                    image: menu_handle.clone(),
-                                    custom_size: Some(bevy::math::Vec2::new(
-                                        panel_width,
-                                        height,
-                                    )),
-                                    color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.0),
-                                    ..Default::default()
-                                },
-                                bevy::transform::components::Transform::from_xyz(
-                                    -width / 2.0 + panel_width / 2.0 - panel_width * 1.05,
-                                    0.0,
-                                    1.0,
-                                ),
-                            ))
-                            .id(),
-                    );
-                    cursor = Some(
-                        commands
-                            .spawn((
-                                bevy::sprite::Sprite {
-                                    image: cursor_handle,
-                                    custom_size: Some(bevy::math::Vec2::splat(
-                                        (height * 0.055).clamp(28.0, 320.0),
-                                    )),
-                                    color: bevy::color::Color::WHITE,
-                                    ..Default::default()
-                                },
-                                bevy::transform::components::Transform::from_xyz(
-                                    0.0, 0.0, 2.0,
-                                ),
-                            ))
-                            .id(),
-                    );
-                    menu_texture = Some(menu_handle);
-                    window.visible = true;
-                    viewport = size;
-                    phase = 1;
-                    idle_at = Some(now + std::time::Duration::from_millis(1200));
-                }
                 let width = size.0 as f32;
                 let height = size.1 as f32;
                 let cover = (width / background_size.x).max(height / background_size.y);
@@ -353,10 +163,303 @@ fn main() {
                 let panel_open_x = -width / 2.0 + panel_width / 2.0;
                 let panel_closed_x = panel_open_x - panel_width * 1.05;
                 let cursor_size = (height * 0.055).clamp(28.0, 320.0);
+                let mut needed_background_level = 0u32;
+                while needed_background_level + 1 < background_level_count
+                    && (background_source_width >> (needed_background_level + 1)) >= size.0
+                    && (background_source_height >> (needed_background_level + 1)) >= size.1
+                {
+                    needed_background_level += 1;
+                }
+                let mut needed_menu_level = 0u32;
+                while needed_menu_level + 1 < menu_level_count
+                    && (menu_source_width >> (needed_menu_level + 1))
+                        >= (panel_width.ceil() as u32).max(1)
+                    && (menu_source_height >> (needed_menu_level + 1)) >= size.1
+                {
+                    needed_menu_level += 1;
+                }
+                let mut needed_cursor_level = 0u32;
+                while needed_cursor_level + 1 < cursor_level_count
+                    && (cursor_source_width >> (needed_cursor_level + 1))
+                        >= (cursor_size.ceil() as u32).max(1)
+                {
+                    needed_cursor_level += 1;
+                }
+                if needed_background_level != background_level
+                    || needed_menu_level != menu_level
+                    || needed_cursor_level != cursor_level
+                {
+                    let (background_image, menu_image, cursor_image) = std::thread::scope(|scope| {
+                        let menu_thread = scope.spawn(|| {
+                            let mut level = needed_menu_level;
+                            let mut level_bytes = 0usize;
+                            while level < menu_level_count {
+                                level_bytes += (((menu_source_width >> level).max(1) + 3) / 4)
+                                    as usize
+                                    * (((menu_source_height >> level).max(1) + 3) / 4) as usize
+                                    * 16;
+                                level += 1;
+                            }
+                            let mut pixels = Vec::with_capacity(level_bytes);
+                            let mut level = needed_menu_level;
+                            while level < menu_level_count {
+                                pixels.extend_from_slice(
+                                    &menu_transcoder
+                                        .transcode(
+                                            level,
+                                            basisu::TargetFormat::Bc7Rgba,
+                                            basisu::DecodeFlags::NONE,
+                                        )
+                                        .expect("menu ktx2 bc7 transcode"),
+                                );
+                                level += 1;
+                            }
+                            let mut image = bevy::image::Image::new(
+                                bevy::render::render_resource::Extent3d {
+                                    width: menu_source_width >> needed_menu_level,
+                                    height: menu_source_height >> needed_menu_level,
+                                    depth_or_array_layers: 1,
+                                },
+                                bevy::render::render_resource::TextureDimension::D2,
+                                pixels,
+                                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+                                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                            );
+                            image.texture_descriptor.mip_level_count =
+                                menu_level_count - needed_menu_level;
+                            image.sampler = bevy::image::ImageSampler::Descriptor(
+                                bevy::render::render_resource::SamplerDescriptor {
+                                    address_mode_u:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_v:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_w:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    min_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    mipmap_filter:
+                                        bevy::render::render_resource::MipmapFilterMode::Linear,
+                                    ..Default::default()
+                                }
+                                .into(),
+                            );
+                            image
+                        });
+                        let cursor_thread = scope.spawn(|| {
+                            let mut level = needed_cursor_level;
+                            let mut level_bytes = 0usize;
+                            while level < cursor_level_count {
+                                level_bytes += (((cursor_source_width >> level).max(1) + 3) / 4)
+                                    as usize
+                                    * (((cursor_source_height >> level).max(1) + 3) / 4) as usize
+                                    * 16;
+                                level += 1;
+                            }
+                            let mut pixels = Vec::with_capacity(level_bytes);
+                            let mut level = needed_cursor_level;
+                            while level < cursor_level_count {
+                                pixels.extend_from_slice(
+                                    &cursor_transcoder
+                                        .transcode(
+                                            level,
+                                            basisu::TargetFormat::Bc7Rgba,
+                                            basisu::DecodeFlags::NONE,
+                                        )
+                                        .expect("cursor ktx2 bc7 transcode"),
+                                );
+                                level += 1;
+                            }
+                            let mut image = bevy::image::Image::new(
+                                bevy::render::render_resource::Extent3d {
+                                    width: cursor_source_width >> needed_cursor_level,
+                                    height: cursor_source_height >> needed_cursor_level,
+                                    depth_or_array_layers: 1,
+                                },
+                                bevy::render::render_resource::TextureDimension::D2,
+                                pixels,
+                                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+                                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                            );
+                            image.texture_descriptor.mip_level_count =
+                                cursor_level_count - needed_cursor_level;
+                            image.sampler = bevy::image::ImageSampler::Descriptor(
+                                bevy::render::render_resource::SamplerDescriptor {
+                                    address_mode_u:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_v:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_w:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    min_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    mipmap_filter:
+                                        bevy::render::render_resource::MipmapFilterMode::Linear,
+                                    ..Default::default()
+                                }
+                                .into(),
+                            );
+                            image
+                        });
+                        let background_image = {
+                            let mut level = needed_background_level;
+                            let mut level_bytes = 0usize;
+                            while level < background_level_count {
+                                level_bytes += (((background_source_width >> level).max(1) + 3)
+                                    / 4)
+                                    as usize
+                                    * (((background_source_height >> level).max(1) + 3) / 4)
+                                        as usize
+                                    * 16;
+                                level += 1;
+                            }
+                            let mut pixels = Vec::with_capacity(level_bytes);
+                            let mut level = needed_background_level;
+                            while level < background_level_count {
+                                pixels.extend_from_slice(
+                                    &background_transcoder
+                                        .transcode(
+                                            level,
+                                            basisu::TargetFormat::Bc7Rgba,
+                                            basisu::DecodeFlags::NONE,
+                                        )
+                                        .expect("background ktx2 bc7 transcode"),
+                                );
+                                level += 1;
+                            }
+                            let mut image = bevy::image::Image::new(
+                                bevy::render::render_resource::Extent3d {
+                                    width: background_source_width >> needed_background_level,
+                                    height: background_source_height >> needed_background_level,
+                                    depth_or_array_layers: 1,
+                                },
+                                bevy::render::render_resource::TextureDimension::D2,
+                                pixels,
+                                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+                                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                            );
+                            image.texture_descriptor.mip_level_count =
+                                background_level_count - needed_background_level;
+                            image.sampler = bevy::image::ImageSampler::Descriptor(
+                                bevy::render::render_resource::SamplerDescriptor {
+                                    address_mode_u:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_v:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_w:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    min_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    mipmap_filter:
+                                        bevy::render::render_resource::MipmapFilterMode::Linear,
+                                    ..Default::default()
+                                }
+                                .into(),
+                            );
+                            image
+                        };
+                        (
+                            background_image,
+                            menu_thread.join().expect("menu ktx2 decode"),
+                            cursor_thread.join().expect("cursor ktx2 decode"),
+                        )
+                    });
+                    let menu_handle = images.add(menu_image);
+                    let background_handle = images.add(background_image);
+                    let cursor_handle = images.add(cursor_image);
+                    if phase == 0 {
+                        background = Some(
+                            commands
+                                .spawn((
+                                    bevy::sprite::Sprite {
+                                        image: background_handle,
+                                        custom_size: Some(background_size),
+                                        color: bevy::color::Color::WHITE,
+                                        ..Default::default()
+                                    },
+                                    bevy::transform::components::Transform::from_scale(
+                                        bevy::math::Vec3::splat(cover),
+                                    ),
+                                    bevy::camera::visibility::Visibility::Visible,
+                                ))
+                                .id(),
+                        );
+                        commands.spawn((
+                            bevy::camera::Camera2d,
+                            bevy::camera::Camera {
+                                clear_color: bevy::camera::ClearColorConfig::Custom(
+                                    bevy::color::Color::BLACK,
+                                ),
+                                ..Default::default()
+                            },
+                        ));
+                        panel = Some(
+                            commands
+                                .spawn((
+                                    bevy::sprite::Sprite {
+                                        image: menu_handle.clone(),
+                                        custom_size: Some(bevy::math::Vec2::new(
+                                            panel_width,
+                                            height,
+                                        )),
+                                        color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.0),
+                                        ..Default::default()
+                                    },
+                                    bevy::transform::components::Transform::from_xyz(
+                                        panel_closed_x,
+                                        0.0,
+                                        1.0,
+                                    ),
+                                    bevy::camera::visibility::Visibility::Hidden,
+                                ))
+                                .id(),
+                        );
+                        cursor = Some(
+                            commands
+                                .spawn((
+                                    bevy::sprite::Sprite {
+                                        image: cursor_handle,
+                                        custom_size: Some(bevy::math::Vec2::splat(cursor_size)),
+                                        color: bevy::color::Color::WHITE,
+                                        ..Default::default()
+                                    },
+                                    bevy::transform::components::Transform::from_xyz(
+                                        0.0, 0.0, 2.0,
+                                    ),
+                                    bevy::camera::visibility::Visibility::Visible,
+                                ))
+                                .id(),
+                        );
+                        menu_texture = Some(menu_handle);
+                        window.visible = true;
+                        viewport = size;
+                        phase = 1;
+                        idle_at = Some(now + std::time::Duration::from_millis(1200));
+                    } else {
+                        if let Some(background_entity) = background {
+                            if let Ok((_, mut sprite, _)) = sprites.get_mut(background_entity) {
+                                sprite.image = background_handle;
+                            }
+                        }
+                        if let Some(panel_entity) = panel {
+                            if let Ok((_, mut sprite, _)) = sprites.get_mut(panel_entity) {
+                                sprite.image = menu_handle.clone();
+                            }
+                        }
+                        if let Some(cursor_entity) = cursor {
+                            if let Ok((_, mut sprite, _)) = sprites.get_mut(cursor_entity) {
+                                sprite.image = cursor_handle;
+                            }
+                        }
+                        menu_texture = Some(menu_handle);
+                    }
+                    background_level = needed_background_level;
+                    menu_level = needed_menu_level;
+                    cursor_level = needed_cursor_level;
+                }
                 if menu_texture.is_some() && size != viewport {
                     viewport = size;
                     if let Some(background_entity) = background {
-                        if let Ok((mut transform, _)) = sprites.get_mut(background_entity) {
+                        if let Ok((mut transform, _, _)) = sprites.get_mut(background_entity) {
                             transform.scale = bevy::math::Vec3::splat(cover);
                         }
                     }
@@ -394,17 +497,22 @@ fn main() {
                 }
                 let target = direction * height * 0.55;
                 cursor_velocity += (target - cursor_velocity) * (1.0 - (-delta / 0.045).exp());
+                let previous_position = cursor_position;
                 cursor_position += cursor_velocity * delta;
                 let limit_x = (width * 0.5 - cursor_size * 0.5).max(0.0);
                 let limit_y = (height * 0.5 - cursor_size * 0.5).max(0.0);
                 cursor_position.x = cursor_position.x.clamp(-limit_x, limit_x);
                 cursor_position.y = cursor_position.y.clamp(-limit_y, limit_y);
-                if let Some(cursor_entity) = cursor {
-                    if let Ok((mut transform, mut sprite)) = sprites.get_mut(cursor_entity) {
-                        transform.translation.x = cursor_position.x;
-                        transform.translation.y = cursor_position.y;
-                        transform.translation.z = 2.0;
-                        sprite.custom_size = Some(bevy::math::Vec2::splat(cursor_size));
+                if cursor_position != previous_position {
+                    if let Some(cursor_entity) = cursor {
+                        if let Ok((mut transform, mut sprite, _)) =
+                            sprites.get_mut(cursor_entity)
+                        {
+                            transform.translation.x = cursor_position.x;
+                            transform.translation.y = cursor_position.y;
+                            transform.translation.z = 2.0;
+                            sprite.custom_size = Some(bevy::math::Vec2::splat(cursor_size));
+                        }
                     }
                 }
                 if panel_animation != 0 {
@@ -419,7 +527,9 @@ fn main() {
                         * panel_progress
                         * (panel_progress * (panel_progress * 6.0 - 15.0) + 10.0);
                     if let Some(panel_entity) = panel {
-                        if let Ok((mut transform, mut sprite)) = sprites.get_mut(panel_entity) {
+                        if let Ok((mut transform, mut sprite, mut visibility)) =
+                            sprites.get_mut(panel_entity)
+                        {
                             transform.translation.x =
                                 panel_closed_x + (panel_open_x - panel_closed_x) * eased;
                             transform.translation.z = 1.0;
@@ -427,6 +537,13 @@ fn main() {
                                 Some(bevy::math::Vec2::new(panel_width, height));
                             sprite.color =
                                 bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.92 * eased);
+                            if eased > 0.0 {
+                                *visibility = bevy::camera::visibility::Visibility::Visible;
+                                panel_drawn = true;
+                            } else if panel_drawn {
+                                *visibility = bevy::camera::visibility::Visibility::Hidden;
+                                panel_drawn = false;
+                            }
                         }
                     }
                     if panel_animation == 1 && panel_progress >= 1.0 {
@@ -443,7 +560,14 @@ fn main() {
                 } else if phase == 1 {
                     if let Some(deadline) = idle_at {
                         if deadline <= now {
-                            *winit = bevy::winit::WinitSettings::desktop_app();
+                            *winit = bevy::winit::WinitSettings {
+                                focused_mode: bevy::winit::UpdateMode::reactive(
+                                    std::time::Duration::from_secs(30),
+                                ),
+                                unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(
+                                    std::time::Duration::from_secs(60),
+                                ),
+                            };
                             idle_at = None;
                             phase = 2;
                         }
