@@ -14,9 +14,9 @@ env:
   X86_BASE: "-Ctarget-cpu=x86-64 -Ctarget-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha"
 
 jobs:
-  linux:
+  Linux-Subsystem-for-Arxumbra:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -25,25 +25,30 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup component add llvm-tools
+          rustup target add aarch64-unknown-linux-gnu
 
-      - name: System dependencies (wayland, weston, lavapipe, llvm-18, lld)
+      - name: System dependencies (wayland, weston, lavapipe, llvm-18, lld, aarch64 cross)
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers \
-            llvm-18 lld-18 xz-utils
+            llvm-18 lld-18 xz-utils gcc-aarch64-linux-gnu
           sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            libwayland-dev:arm64 libxkbcommon-dev:arm64
 
       - name: Stage 1 - locked dependency fetch
         run: cargo fetch --locked
 
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO, x86_64)
         run: |
           mkdir -p pgo-profile
           RUSTFLAGS="$X86_BASE -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
 
-      - name: Stage 3 - headless profile run (weston + lavapipe, SIGINT = graceful exit, empty stderr = both ktx2 textures decoded)
+      - name: Stage 3 - headless profile run (weston + lavapipe, SIGINT = graceful exit, empty stderr)
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
           weston --backend=headless-backend.so --socket=arx-smoke --idle-time=0 &
@@ -67,7 +72,7 @@ jobs:
           [ -x "$PROFDATA" ] || { echo "::error::llvm-profdata из sysroot не найден"; exit 1; }
           "$PROFDATA" merge -o pgo.profdata pgo-profile/
 
-      - name: Stage 5 - PGO build (profile-use, fat LTO, lld)
+      - name: Stage 5 - PGO build (profile-use, fat LTO, lld, x86_64)
         run: |
           RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,-O1 -Clink-arg=-Wl,--as-needed -Clink-arg=-Wl,--gc-sections -Clink-arg=-Wl,-z,norelro" cargo build --release --locked
 
@@ -87,22 +92,32 @@ jobs:
             exit 1
           fi
 
-      - name: Stage 7 - strip and compress
+      - name: Stage 7 - aarch64 cross build (fat LTO)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: 1
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+        run: cargo build --release --locked --target aarch64-unknown-linux-gnu
+
+      - name: Stage 8 - package
         run: |
-          llvm-strip-18 --strip-all target/release/$BIN
           mkdir dist
-          cp target/release/$BIN dist/$BIN
-          xz -9e -T2 dist/$BIN
-          sha256sum dist/$BIN.xz > dist/SHA256SUMS.txt
+          cp target/release/$BIN dist/Linux-Subsystem-for-Arxumbra
+          tar cJf dist/Linux-Subsystem-for-Arxumbra-linux-x86_64.tar.xz -C dist Linux-Subsystem-for-Arxumbra
+          rm dist/Linux-Subsystem-for-Arxumbra
+          cp target/aarch64-unknown-linux-gnu/release/$BIN dist/Linux-Subsystem-for-Arxumbra
+          tar cJf dist/Linux-Subsystem-for-Arxumbra-linux-aarch64.tar.xz -C dist Linux-Subsystem-for-Arxumbra
+          rm dist/Linux-Subsystem-for-Arxumbra
+          sha256sum dist/*.tar.xz > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-x86_64
+          name: Linux-Subsystem-for-Arxumbra
           path: dist/*
 
-  macos:
-    runs-on: macos-latest
-    timeout-minutes: 240
+  macOS-Subsystem-for-Arxumbra:
+    runs-on: macos-15
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -111,52 +126,61 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup component add llvm-tools
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
 
       - name: Stage 1 - locked dependency fetch
         run: cargo fetch --locked
 
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO, aarch64)
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="-Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked
+          RUSTFLAGS="-Clink-arg=-Wl,-dead_strip -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target aarch64-apple-darwin
 
       - name: Stage 3 - profile run (SIGINT = graceful exit, best effort)
         run: |
           export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
-          ./target/release/subsystem-for-arxumbra 2>/dev/null &
+          ./target/aarch64-apple-darwin/release/$BIN 2>/dev/null &
           APP_PID=$!
           sleep 25
           kill -INT $APP_PID 2>/dev/null || true
           wait $APP_PID 2>/dev/null || true
           exit 0
 
-      - name: Stage 4 - PGO build or fallback (fat LTO)
+      - name: Stage 4 - PGO build or fallback (fat LTO, aarch64)
         run: |
           PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
           if [ -s pgo-profile/default.profraw ] && [ -n "$PROFDATA" ]; then
             "$PROFDATA" merge -o pgo.profdata pgo-profile/
-            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked
+            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked --target aarch64-apple-darwin
           else
             echo "профиль недоступен, собираю чистый fat LTO релиз"
-            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked
+            RUSTFLAGS="-Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked --target aarch64-apple-darwin
           fi
 
-      - name: Stage 5 - artifact
+      - name: Stage 5 - x86_64 build (fat LTO)
+        run: |
+          RUSTFLAGS="$X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=-Wl,-dead_strip" cargo build --release --locked --target x86_64-apple-darwin
+
+      - name: Stage 6 - package
         run: |
           mkdir dist
-          cp target/release/subsystem-for-arxumbra dist/subsystem-for-arxumbra
-          tar czf dist/subsystem-for-arxumbra-macos-aarch64.tar.gz -C dist subsystem-for-arxumbra
-          rm dist/subsystem-for-arxumbra
-          shasum -a 256 dist/subsystem-for-arxumbra-macos-aarch64.tar.gz > dist/SHA256SUMS.txt
+          cp target/aarch64-apple-darwin/release/$BIN dist/macOS-Subsystem-for-Arxumbra
+          tar czf dist/macOS-Subsystem-for-Arxumbra-macos-aarch64.tar.gz -C dist macOS-Subsystem-for-Arxumbra
+          rm dist/macOS-Subsystem-for-Arxumbra
+          cp target/x86_64-apple-darwin/release/$BIN dist/macOS-Subsystem-for-Arxumbra
+          tar czf dist/macOS-Subsystem-for-Arxumbra-macos-x86_64.tar.gz -C dist macOS-Subsystem-for-Arxumbra
+          rm dist/macOS-Subsystem-for-Arxumbra
+          shasum -a 256 dist/*.tar.gz > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-aarch64
+          name: macOS-Subsystem-for-Arxumbra
           path: dist/*
 
-  windows:
+  Windows-Subsystem-for-Arxumbra:
     runs-on: windows-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -165,60 +189,74 @@ jobs:
           rustup toolchain install stable-msvc --profile minimal
           rustup default stable-msvc
           rustup component add llvm-tools
+          rustup target add x86_64-pc-windows-msvc
+          rustup target add aarch64-pc-windows-msvc
 
       - name: Stage 1 - locked dependency fetch
         run: cargo fetch --locked
 
-      - name: Stage 2 - instrumented build (PGO generate, fat LTO)
+      - name: Stage 2 - instrumented build (PGO generate, fat LTO, x86_64)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pgo-profile | Out-Null
           $env:RUSTFLAGS = "$env:X86_BASE -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-generate=$env:GITHUB_WORKSPACE\pgo-profile"
-          cargo build --release --locked
+          cargo build --release --locked --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Stage 3 - profile run (best effort)
         shell: pwsh
         run: |
           $env:LLVM_PROFILE_FILE = "$env:GITHUB_WORKSPACE\pgo-profile\default.profraw"
-          $proc = Start-Process -FilePath "target\release\subsystem-for-arxumbra.exe" -PassThru -RedirectStandardError smoke.err -ErrorAction SilentlyContinue
+          $proc = Start-Process -FilePath "target\x86_64-pc-windows-msvc\release\$env:BIN.exe" -PassThru -RedirectStandardError smoke.err -ErrorAction SilentlyContinue
           if ($proc) {
             Start-Sleep -Seconds 25
             if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
           }
           exit 0
 
-      - name: Stage 4 - PGO build or fallback (fat LTO)
+      - name: Stage 4 - PGO build or fallback (fat LTO, x86_64)
         shell: pwsh
         run: |
           $sysroot = (rustc --print sysroot)
           $profdata = Get-ChildItem -Path "$sysroot\lib\rustlib" -Recurse -Filter "llvm-profdata.exe" | Select-Object -First 1
-          if ((Test-Path "pgo-profile\default.profraw") -and $profdata) {
-            & $profdata.FullName merge -o pgo.profdata pgo-profile
+          $profileRaw = "$env:GITHUB_WORKSPACE\pgo-profile\default.profraw"
+          if ((Test-Path $profileRaw) -and (Get-Item $profileRaw).Length -gt 0 -and $profdata) {
+            & $profdata.FullName merge -o pgo.profdata "$env:GITHUB_WORKSPACE\pgo-profile"
             $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF -Cprofile-use=$env:GITHUB_WORKSPACE\pgo.profdata"
           } else {
             Write-Output "профиль недоступен, собираю чистый fat LTO релиз"
             $env:RUSTFLAGS = "$env:X86_BASE -Cllvm-args=--inline-threshold=1000 -Clink-arg=/OPT:REF -Clink-arg=/OPT:ICF"
           }
-          cargo build --release --locked
+          cargo build --release --locked --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 5 - artifact
+      - name: Stage 5 - aarch64 build (fat LTO, MSVC ARM64 через xwin)
+        shell: pwsh
+        run: |
+          cargo install cargo-xwin --locked
+          $env:XWIN_ARCH = "aarch64"
+          cargo xwin build --release --locked --target aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Stage 6 - package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target\release\subsystem-for-arxumbra.exe" "dist\subsystem-for-arxumbra.exe"
-          tar czf "dist\subsystem-for-arxumbra-windows-x86_64.tar.gz" -C dist "subsystem-for-arxumbra.exe"
-          Remove-Item "dist\subsystem-for-arxumbra.exe"
-          (Get-FileHash "dist\subsystem-for-arxumbra-windows-x86_64.tar.gz" -Algorithm SHA256).Hash.ToLower() + "  subsystem-for-arxumbra-windows-x86_64.tar.gz" | Out-File -Encoding ascii "dist\SHA256SUMS.txt"
+          Copy-Item "target\x86_64-pc-windows-msvc\release\$env:BIN.exe" "dist\Windows-Subsystem-for-Arxumbra.exe"
+          Compress-Archive -Path "dist\Windows-Subsystem-for-Arxumbra.exe" -DestinationPath "dist\Windows-Subsystem-for-Arxumbra-windows-x86_64.zip"
+          Remove-Item "dist\Windows-Subsystem-for-Arxumbra.exe"
+          Copy-Item "target\aarch64-pc-windows-msvc\release\$env:BIN.exe" "dist\Windows-Subsystem-for-Arxumbra.exe"
+          Compress-Archive -Path "dist\Windows-Subsystem-for-Arxumbra.exe" -DestinationPath "dist\Windows-Subsystem-for-Arxumbra-windows-aarch64.zip"
+          Remove-Item "dist\Windows-Subsystem-for-Arxumbra.exe"
+          (Get-ChildItem "dist\*.zip" | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name }) | Out-File -Encoding ascii "dist\SHA256SUMS.txt"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x86_64
+          name: Windows-Subsystem-for-Arxumbra
           path: dist/*
 
   release:
-    needs: [linux, macos, windows]
+    needs: [Linux-Subsystem-for-Arxumbra, macOS-Subsystem-for-Arxumbra, Windows-Subsystem-for-Arxumbra]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -230,7 +268,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/linux-x86_64/*
-            dist/macos-aarch64/*
-            dist/windows-x86_64/*
+            dist/Linux-Subsystem-for-Arxumbra/*
+            dist/macOS-Subsystem-for-Arxumbra/*
+            dist/Windows-Subsystem-for-Arxumbra/*
           generate_release_notes: true
