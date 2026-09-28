@@ -185,39 +185,59 @@ fn main() {
                 {
                     needed_cursor_level += 1;
                 }
+                let background_mips = if cover >= 1.0 {
+                    1
+                } else {
+                    background_level_count - needed_background_level
+                };
+                let menu_mips = if panel_width >= (menu_source_width >> needed_menu_level) as f32
+                    && height >= (menu_source_height >> needed_menu_level) as f32
+                {
+                    1
+                } else {
+                    menu_level_count - needed_menu_level
+                };
+                let cursor_mips = if cursor_size >= (cursor_source_width >> needed_cursor_level) as f32
+                {
+                    1
+                } else {
+                    cursor_level_count - needed_cursor_level
+                };
                 if needed_background_level != background_level
                     || needed_menu_level != menu_level
                     || needed_cursor_level != cursor_level
                 {
                     let (background_image, menu_image, cursor_image) = std::thread::scope(|scope| {
                         let menu_thread = scope.spawn(|| {
-                            let mut level = needed_menu_level;
+                            let level = needed_menu_level;
                             let mut level_bytes = 0usize;
-                            while level < menu_level_count {
-                                level_bytes += (((menu_source_width >> level).max(1) + 3) / 4)
+                            let mut level_index = 0u32;
+                            while level_index < menu_mips {
+                                level_bytes += (((menu_source_width >> (level + level_index)).max(1) + 3) / 4)
                                     as usize
-                                    * (((menu_source_height >> level).max(1) + 3) / 4) as usize
+                                    * (((menu_source_height >> (level + level_index)).max(1) + 3) / 4)
+                                        as usize
                                     * 16;
-                                level += 1;
+                                level_index += 1;
                             }
                             let mut pixels = Vec::with_capacity(level_bytes);
-                            let mut level = needed_menu_level;
-                            while level < menu_level_count {
+                            level_index = 0u32;
+                            while level_index < menu_mips {
                                 pixels.extend_from_slice(
                                     &menu_transcoder
                                         .transcode(
-                                            level,
+                                            level + level_index,
                                             basisu::TargetFormat::Bc7Rgba,
                                             basisu::DecodeFlags::NONE,
                                         )
                                         .expect("menu ktx2 bc7 transcode"),
                                 );
-                                level += 1;
+                                level_index += 1;
                             }
                             let mut image = bevy::image::Image::new(
                                 bevy::render::render_resource::Extent3d {
-                                    width: menu_source_width >> needed_menu_level,
-                                    height: menu_source_height >> needed_menu_level,
+                                    width: menu_source_width >> level,
+                                    height: menu_source_height >> level,
                                     depth_or_array_layers: 1,
                                 },
                                 bevy::render::render_resource::TextureDimension::D2,
@@ -225,8 +245,7 @@ fn main() {
                                 bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
                                 bevy::asset::RenderAssetUsages::RENDER_WORLD,
                             );
-                            image.texture_descriptor.mip_level_count =
-                                menu_level_count - needed_menu_level;
+                            image.texture_descriptor.mip_level_count = menu_mips;
                             image.sampler = bevy::image::ImageSampler::Descriptor(
                                 bevy::render::render_resource::SamplerDescriptor {
                                     address_mode_u:
@@ -246,33 +265,35 @@ fn main() {
                             image
                         });
                         let cursor_thread = scope.spawn(|| {
-                            let mut level = needed_cursor_level;
+                            let level = needed_cursor_level;
                             let mut level_bytes = 0usize;
-                            while level < cursor_level_count {
-                                level_bytes += (((cursor_source_width >> level).max(1) + 3) / 4)
+                            let mut level_index = 0u32;
+                            while level_index < cursor_mips {
+                                level_bytes += (((cursor_source_width >> (level + level_index)).max(1) + 3) / 4)
                                     as usize
-                                    * (((cursor_source_height >> level).max(1) + 3) / 4) as usize
+                                    * (((cursor_source_height >> (level + level_index)).max(1) + 3) / 4)
+                                        as usize
                                     * 16;
-                                level += 1;
+                                level_index += 1;
                             }
                             let mut pixels = Vec::with_capacity(level_bytes);
-                            let mut level = needed_cursor_level;
-                            while level < cursor_level_count {
+                            level_index = 0u32;
+                            while level_index < cursor_mips {
                                 pixels.extend_from_slice(
                                     &cursor_transcoder
                                         .transcode(
-                                            level,
+                                            level + level_index,
                                             basisu::TargetFormat::Bc7Rgba,
                                             basisu::DecodeFlags::NONE,
                                         )
                                         .expect("cursor ktx2 bc7 transcode"),
                                 );
-                                level += 1;
+                                level_index += 1;
                             }
                             let mut image = bevy::image::Image::new(
                                 bevy::render::render_resource::Extent3d {
-                                    width: cursor_source_width >> needed_cursor_level,
-                                    height: cursor_source_height >> needed_cursor_level,
+                                    width: cursor_source_width >> level,
+                                    height: cursor_source_height >> level,
                                     depth_or_array_layers: 1,
                                 },
                                 bevy::render::render_resource::TextureDimension::D2,
@@ -280,8 +301,7 @@ fn main() {
                                 bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
                                 bevy::asset::RenderAssetUsages::RENDER_WORLD,
                             );
-                            image.texture_descriptor.mip_level_count =
-                                cursor_level_count - needed_cursor_level;
+                            image.texture_descriptor.mip_level_count = cursor_mips;
                             image.sampler = bevy::image::ImageSampler::Descriptor(
                                 bevy::render::render_resource::SamplerDescriptor {
                                     address_mode_u:
@@ -301,35 +321,35 @@ fn main() {
                             image
                         });
                         let background_image = {
-                            let mut level = needed_background_level;
+                            let level = needed_background_level;
                             let mut level_bytes = 0usize;
-                            while level < background_level_count {
-                                level_bytes += (((background_source_width >> level).max(1) + 3)
-                                    / 4)
+                            let mut level_index = 0u32;
+                            while level_index < background_mips {
+                                level_bytes += (((background_source_width >> (level + level_index)).max(1) + 3) / 4)
                                     as usize
-                                    * (((background_source_height >> level).max(1) + 3) / 4)
+                                    * (((background_source_height >> (level + level_index)).max(1) + 3) / 4)
                                         as usize
                                     * 16;
-                                level += 1;
+                                level_index += 1;
                             }
                             let mut pixels = Vec::with_capacity(level_bytes);
-                            let mut level = needed_background_level;
-                            while level < background_level_count {
+                            level_index = 0u32;
+                            while level_index < background_mips {
                                 pixels.extend_from_slice(
                                     &background_transcoder
                                         .transcode(
-                                            level,
+                                            level + level_index,
                                             basisu::TargetFormat::Bc7Rgba,
                                             basisu::DecodeFlags::NONE,
                                         )
                                         .expect("background ktx2 bc7 transcode"),
                                 );
-                                level += 1;
+                                level_index += 1;
                             }
                             let mut image = bevy::image::Image::new(
                                 bevy::render::render_resource::Extent3d {
-                                    width: background_source_width >> needed_background_level,
-                                    height: background_source_height >> needed_background_level,
+                                    width: background_source_width >> level,
+                                    height: background_source_height >> level,
                                     depth_or_array_layers: 1,
                                 },
                                 bevy::render::render_resource::TextureDimension::D2,
@@ -337,8 +357,7 @@ fn main() {
                                 bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
                                 bevy::asset::RenderAssetUsages::RENDER_WORLD,
                             );
-                            image.texture_descriptor.mip_level_count =
-                                background_level_count - needed_background_level;
+                            image.texture_descriptor.mip_level_count = background_mips;
                             image.sampler = bevy::image::ImageSampler::Descriptor(
                                 bevy::render::render_resource::SamplerDescriptor {
                                     address_mode_u:
