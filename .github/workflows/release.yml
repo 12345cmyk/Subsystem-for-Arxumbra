@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   Linux-Subsystem-for-Arxumbra:
-    name: Linux-Subsystem-for-Arxumbra-${{ matrix.arch }}
+    name: ${{ matrix.arch }}-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -22,24 +22,26 @@ jobs:
             arch: aarch64
             pgo: false
             cross: true
-            flags: '-C target-cpu=generic -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            flags: '-C target-cpu=generic -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
           - target: x86_64-unknown-linux-gnu
             arch: x86_64
             pgo: true
             cross: false
-            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
     env:
-      BINARY: Linux-Subsystem-for-Arxumbra
+      NAME: Linux-Subsystem-for-Arxumbra
       CARGO_BIN: subsystem-for-arxumbra
+      SUFFIX: -v0.0.0.0.0.0-s5
+      BUILD_STD: -Zbuild-std=std,panic_abort
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Stage 1 - Rust toolchain
+      - name: Stage 1 - Rust nightly toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup component add llvm-tools
+          rustup toolchain install nightly --profile minimal -c rust-src -c llvm-tools
+          rustup default nightly
           rustup target add ${{ matrix.target }}
+          rustc -vV
 
       - name: Stage 2 - system dependencies
         run: |
@@ -47,7 +49,7 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers \
-            llvm-18 lld-18 xz-utils
+            llvm-18 lld-18 xz-utils file
           sudo ln -sf /usr/bin/ld.lld-18 /usr/local/bin/ld.lld
 
       - name: Stage 2a - aarch64 cross toolchain
@@ -84,15 +86,15 @@ jobs:
       - name: Stage 3 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 4a - instrumented build (PGO generate, fat LTO)
+      - name: Stage 4a - instrumented build (PGO generate, fat LTO, build-std)
         if: matrix.pgo
         run: |
           mkdir -p pgo-profile
-          RUSTFLAGS="${{ matrix.flags }} -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target ${{ matrix.target }}
+          RUSTFLAGS="${{ matrix.flags }} -Cprofile-generate=$PWD/pgo-profile" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
-      - name: Stage 4b - plain build (fat LTO)
+      - name: Stage 4b - plain build (fat LTO, build-std)
         if: ${{ !matrix.pgo }}
-        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }}
+        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
       - name: Stage 5 - headless profile run (weston + lavapipe, empty stderr)
         if: matrix.pgo
@@ -120,10 +122,10 @@ jobs:
           [ -x "$PROFDATA" ] || { echo "::error::llvm-profdata из sysroot не найден"; exit 1; }
           "$PROFDATA" merge -o pgo.profdata pgo-profile/
 
-      - name: Stage 7 - PGO build (profile-use, fat LTO, lld)
+      - name: Stage 7 - PGO build (profile-use, fat LTO, lld, build-std)
         if: matrix.pgo
         run: |
-          RUSTFLAGS="${{ matrix.flags }} -Cprofile-use=$PWD/pgo.profdata -Clink-arg=-fuse-ld=lld" cargo build --release --locked --target ${{ matrix.target }}
+          RUSTFLAGS="${{ matrix.flags }} -Cprofile-use=$PWD/pgo.profdata" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
       - name: Stage 8 - verification run (shipped binary, empty stderr)
         if: matrix.pgo
@@ -145,19 +147,42 @@ jobs:
       - name: Stage 9 - package
         run: |
           mkdir dist
-          cp target/${{ matrix.target }}/release/$CARGO_BIN dist/$BINARY
-          chmod 755 dist/$BINARY
-          tar cf - -C dist "$BINARY" | xz -9e -T0 -c > "dist/$BINARY-linux-${{ matrix.arch }}.tar.xz"
-          rm dist/$BINARY
+          FINAL="${{ matrix.arch }}-$NAME$SUFFIX"
+          cp target/${{ matrix.target }}/release/$CARGO_BIN "dist/$FINAL"
+          chmod 755 "dist/$FINAL"
+          tar cf - -C dist "$FINAL" | xz -9e -T0 -c > "dist/$FINAL.tar.xz"
+          rm "dist/$FINAL"
           sha256sum dist/*.tar.xz > "dist/SHA256SUMS-${{ matrix.arch }}.txt"
+
+      - name: Stage 10 - binary identity check (ELF, architecture, no debug sections)
+        run: |
+          FILE_TYPE=$(file -b "target/${{ matrix.target }}/release/$CARGO_BIN")
+          echo "$FILE_TYPE"
+          case "$FILE_TYPE" in
+            *ELF*) ;;
+            *) echo "::error::не ELF: $FILE_TYPE"; exit 1;;
+          esac
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            WANT="ARM aarch64"
+          else
+            WANT="x86-64"
+          fi
+          case "$FILE_TYPE" in
+            *"$WANT"*) ;;
+            *) echo "::error::ожидалась архитектура $WANT: $FILE_TYPE"; exit 1;;
+          esac
+          if readelf -S "target/${{ matrix.target }}/release/$CARGO_BIN" | grep -q 'debug'; then
+            echo "::error::в бинарнике остались debug-секции"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ env.BINARY }}-${{ matrix.arch }}
+          name: ${{ matrix.arch }}-${{ env.NAME }}${{ env.SUFFIX }}
           path: dist/*
 
   macOS-Subsystem-for-Arxumbra:
-    name: macOS-Subsystem-for-Arxumbra-${{ matrix.arch }}
+    name: ${{ matrix.arch }}-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
     runs-on: macos-15
     timeout-minutes: 240
     strategy:
@@ -171,39 +196,63 @@ jobs:
             arch: x86_64
             flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=-Wl,-dead_strip -C link-arg=-Wl,-no_fixup_chains -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
     env:
-      BINARY: macOS-Subsystem-for-Arxumbra
+      NAME: macOS-Subsystem-for-Arxumbra
       CARGO_BIN: subsystem-for-arxumbra
+      SUFFIX: -v0.0.0.0.0.0-s5
+      BUILD_STD: -Zbuild-std=std,panic_abort
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Stage 1 - Rust toolchain
+      - name: Stage 1 - Rust nightly toolchain
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install nightly --profile minimal -c rust-src
+          rustup default nightly
           rustup target add ${{ matrix.target }}
+          rustc -vV
 
       - name: Stage 2 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 3 - build (fat LTO)
-        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }}
+      - name: Stage 3 - build (fat LTO, build-std)
+        run: RUSTFLAGS="${{ matrix.flags }}" cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
       - name: Stage 4 - package
         run: |
           mkdir dist
-          cp target/${{ matrix.target }}/release/$CARGO_BIN dist/$BINARY
-          chmod 755 dist/$BINARY
-          tar czf "dist/$BINARY-macos-${{ matrix.arch }}.tar.gz" -C dist "$BINARY"
-          rm dist/$BINARY
+          FINAL="${{ matrix.arch }}-$NAME$SUFFIX"
+          cp target/${{ matrix.target }}/release/$CARGO_BIN "dist/$FINAL"
+          chmod 755 "dist/$FINAL"
+          tar czf "dist/$FINAL.tar.gz" -C dist "$FINAL"
+          rm "dist/$FINAL"
           shasum -a 256 dist/*.tar.gz > "dist/SHA256SUMS-${{ matrix.arch }}.txt"
+
+      - name: Stage 5 - binary identity check (Mach-O, architecture)
+        run: |
+          FILE_TYPE=$(file -b "target/${{ matrix.target }}/release/$CARGO_BIN")
+          echo "$FILE_TYPE"
+          case "$FILE_TYPE" in
+            *Mach-O*) ;;
+            *) echo "::error::не Mach-O: $FILE_TYPE"; exit 1;;
+          esac
+          ARCHS=$(lipo -archs "target/${{ matrix.target }}/release/$CARGO_BIN")
+          echo "$ARCHS"
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            WANT="arm64"
+          else
+            WANT="x86_64"
+          fi
+          case "$ARCHS" in
+            *"$WANT"*) ;;
+            *) echo "::error::ожидалась архитектура $WANT: $ARCHS"; exit 1;;
+          esac
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ env.BINARY }}-${{ matrix.arch }}
+          name: ${{ matrix.arch }}-${{ env.NAME }}${{ env.SUFFIX }}
           path: dist/*
 
   Windows-Subsystem-for-Arxumbra:
-    name: Windows-Subsystem-for-Arxumbra-${{ matrix.arch }}
+    name: ${{ matrix.arch }}-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
     runs-on: windows-latest
     timeout-minutes: 360
     strategy:
@@ -219,47 +268,67 @@ jobs:
             xwin: false
             flags: '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
     env:
-      BINARY: Windows-Subsystem-for-Arxumbra
+      NAME: Windows-Subsystem-for-Arxumbra
       CARGO_BIN: subsystem-for-arxumbra
+      SUFFIX: -v0.0.0.0.0.0-s5
+      BUILD_STD: -Zbuild-std=std,panic_abort
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Stage 1 - Rust toolchain
+      - name: Stage 1 - Rust nightly toolchain
         run: |
-          rustup toolchain install stable-msvc --profile minimal
-          rustup default stable-msvc
+          rustup toolchain install nightly --profile minimal -c rust-src
+          rustup default nightly
           rustup target add ${{ matrix.target }}
+          rustc -vV
 
       - name: Stage 2 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 3a - build x86_64 (fat LTO)
+      - name: Stage 3a - build x86_64 (fat LTO, build-std)
         if: ${{ !matrix.xwin }}
         run: |
           $env:RUSTFLAGS = "${{ matrix.flags }}"
-          cargo build --release --locked --target ${{ matrix.target }}
+          cargo build --release --locked --target ${{ matrix.target }} $env:BUILD_STD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 3b - build aarch64 (fat LTO, MSVC ARM64 через xwin)
+      - name: Stage 3b - build aarch64 (fat LTO, MSVC ARM64 через xwin, build-std)
         if: matrix.xwin
         run: |
-          cargo install cargo-xwin --locked
+          cargo install cargo-xwin --version 0.23.1 --locked
           $env:RUSTFLAGS = "${{ matrix.flags }}"
-          cargo xwin build --release --locked --target ${{ matrix.target }}
+          cargo xwin build --release --locked --target ${{ matrix.target }} $env:BUILD_STD
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Stage 4 - package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\$env:CARGO_BIN.exe" "dist\$env:BINARY.exe"
-          Compress-Archive -Path "dist\$env:BINARY.exe" -DestinationPath "dist\$env:BINARY-windows-${{ matrix.arch }}.zip" -CompressionLevel Optimal
-          Remove-Item "dist\$env:BINARY.exe"
+          $final = "${{ matrix.arch }}-$env:NAME$env:SUFFIX"
+          Copy-Item "target\${{ matrix.target }}\release\$env:CARGO_BIN.exe" "dist\$final.exe"
+          Compress-Archive -Path "dist\$final.exe" -DestinationPath "dist\$final.zip" -CompressionLevel Optimal
+          Remove-Item "dist\$final.exe"
           (Get-ChildItem "dist\*.zip" | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name }) | Out-File -Encoding ascii "dist\SHA256SUMS-${{ matrix.arch }}.txt"
+
+      - name: Stage 5 - binary identity check (PE, machine type)
+        shell: pwsh
+        run: |
+          $path = "target\${{ matrix.target }}\release\$env:CARGO_BIN.exe"
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          $mz = [System.Text.Encoding]::ASCII.GetString($bytes, 0, 2)
+          if ($mz -ne 'MZ') { throw "не PE: $mz" }
+          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
+          $signature = [System.BitConverter]::ToUInt32($bytes, $peOffset)
+          if ($signature -ne 0x00004550) { throw "нет PE-сигнатуры: 0x$($signature.ToString('x8'))" }
+          $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          $want = if ('${{ matrix.arch }}' -eq 'aarch64') { 0xAA64 } else { 0x8664 }
+          $hex = '0x' + $machine.ToString('x4')
+          Write-Host "machine = $hex"
+          if ($machine -ne $want) { throw "ожидалась машина 0x$($want.ToString('x4')), получено $hex" }
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ env.BINARY }}-${{ matrix.arch }}
+          name: ${{ matrix.arch }}-${{ env.NAME }}${{ env.SUFFIX }}
           path: dist/*
 
   release:
