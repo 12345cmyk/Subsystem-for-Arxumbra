@@ -28,25 +28,29 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config p7zip-full zstd
-          command -v 7z > /dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
           command -v zstd > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v4
         with:
           path: ~/llvm
-          key: arx-llvm-llvmorg-23.1.2-linux-arm64-7z
+          key: arx-llvm-llvmorg-23.1.2-linux-arm64-7zz2
 
       - name: stable llvm linker
         run: |
+          curl -fsSL --retry 3 -o /tmp/7z.tar.xz https://www.7-zip.org/a/7z2501-linux-arm64.tar.xz
+          python3 -c "import shutil, tarfile; shutil.copyfileobj(tarfile.open('/tmp/7z.tar.xz').extractfile('7zzs'), open('/tmp/7zzs', 'wb'))"
+          chmod 755 /tmp/7zzs
+          /tmp/7zzs > /dev/null
           mkdir -p "$HOME/llvm"
           if [ ! -x "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/ld.lld" ]; then
             curl -fsSL --retry 3 -o /tmp/llvm.tar.zst https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.2/LLVM-23.1.2-Linux-ARM64.tar.zst
-            zstd -dc --long=30 /tmp/llvm.tar.zst | 7z x -si -ttar -y -bso0 -bsp0 -o"$HOME/llvm" 'LLVM-23.1.2-Linux-ARM64/bin/ld.lld' 'LLVM-23.1.2-Linux-ARM64/bin/lld' 'LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy'
+            zstd -dc --long=30 /tmp/llvm.tar.zst | /tmp/7zzs x -si -ttar -y -bso0 -bsp0 -o"$HOME/llvm" 'LLVM-23.1.2-Linux-ARM64/bin/ld.lld' 'LLVM-23.1.2-Linux-ARM64/bin/lld' 'LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy'
+            chmod 755 "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/ld.lld" "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/lld" "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy"
             rm -f /tmp/llvm.tar.zst
           fi
-          "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/ld.lld" --version > /dev/null
+          "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/ld.lld" --version > /dev/null || { ls -l "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin"; file "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/ld.lld"; exit 1; }
 
       - name: build
         env:
@@ -69,7 +73,7 @@ jobs:
           mkdir -p dist && cd dist
           cp ../target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           chmod 755 aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
-          7z a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           rm aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
 
       - uses: actions/upload-artifact@v7.0.1
@@ -91,25 +95,29 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config p7zip-full zstd
-          command -v 7z > /dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
           command -v zstd > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v4
         with:
           path: ~/llvm
-          key: arx-llvm-llvmorg-23.1.2-linux-x64-7z
+          key: arx-llvm-llvmorg-23.1.2-linux-x64-7zz2
 
       - name: stable llvm linker
         run: |
+          curl -fsSL --retry 3 -o /tmp/7z.tar.xz https://www.7-zip.org/a/7z2501-linux-x64.tar.xz
+          python3 -c "import shutil, tarfile; shutil.copyfileobj(tarfile.open('/tmp/7z.tar.xz').extractfile('7zzs'), open('/tmp/7zzs', 'wb'))"
+          chmod 755 /tmp/7zzs
+          /tmp/7zzs > /dev/null
           mkdir -p "$HOME/llvm"
           if [ ! -x "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/ld.lld" ]; then
             curl -fsSL --retry 3 -o /tmp/llvm.tar.zst https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.2/LLVM-23.1.2-Linux-X64.tar.zst
-            zstd -dc --long=30 /tmp/llvm.tar.zst | 7z x -si -ttar -y -bso0 -bsp0 -o"$HOME/llvm" 'LLVM-23.1.2-Linux-X64/bin/ld.lld' 'LLVM-23.1.2-Linux-X64/bin/lld' 'LLVM-23.1.2-Linux-X64/bin/llvm-objcopy'
+            zstd -dc --long=30 /tmp/llvm.tar.zst | /tmp/7zzs x -si -ttar -y -bso0 -bsp0 -o"$HOME/llvm" 'LLVM-23.1.2-Linux-X64/bin/ld.lld' 'LLVM-23.1.2-Linux-X64/bin/lld' 'LLVM-23.1.2-Linux-X64/bin/llvm-objcopy'
+            chmod 755 "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/ld.lld" "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/lld" "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/llvm-objcopy"
             rm -f /tmp/llvm.tar.zst
           fi
-          "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/ld.lld" --version > /dev/null
+          "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/ld.lld" --version > /dev/null || { ls -l "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin"; file "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/ld.lld"; exit 1; }
 
       - name: build
         env:
@@ -132,7 +140,7 @@ jobs:
           mkdir -p dist && cd dist
           cp ../target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           chmod 755 x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
-          7z a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           rm x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
 
       - uses: actions/upload-artifact@v7.0.1
@@ -155,19 +163,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/llvm
-          key: arx-llvm-llvmorg-23.1.2-macos-7z
+          key: arx-llvm-llvmorg-23.1.2-macos-7zz2
 
       - name: stable llvm linker
         run: |
           curl -fsSL --retry 3 -o /tmp/7z.tar.xz https://www.7-zip.org/a/7z2501-mac.tar.xz
-          tar -xf /tmp/7z.tar.xz -C /tmp 7zz
+          python3 -c "import shutil, tarfile; shutil.copyfileobj(tarfile.open('/tmp/7z.tar.xz').extractfile('7zz'), open('/tmp/7zz', 'wb'))"
+          chmod 755 /tmp/7zz
           mkdir -p "$HOME/llvm"
           if [ ! -x "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" ]; then
             curl -fsSL --retry 3 -o /tmp/llvm.tar.zst https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.2/LLVM-23.1.2-macOS-ARM64.tar.zst
             zstd -dc --long=30 /tmp/llvm.tar.zst | /tmp/7zz x -si -ttar -y -bso0 -bsp0 -o"$HOME/llvm" 'LLVM-23.1.2-macOS-ARM64/bin/ld64.lld' 'LLVM-23.1.2-macOS-ARM64/bin/lld'
+            chmod 755 "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/lld"
             rm -f /tmp/llvm.tar.zst
           fi
-          "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" --version > /dev/null
+          "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" --version > /dev/null || { ls -l "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin"; file "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld"; exit 1; }
 
       - name: build
         env:
@@ -212,19 +222,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/llvm
-          key: arx-llvm-llvmorg-23.1.2-macos-7z
+          key: arx-llvm-llvmorg-23.1.2-macos-7zz2
 
       - name: stable llvm linker
         run: |
           curl -fsSL --retry 3 -o /tmp/7z.tar.xz https://www.7-zip.org/a/7z2501-mac.tar.xz
-          tar -xf /tmp/7z.tar.xz -C /tmp 7zz
+          python3 -c "import shutil, tarfile; shutil.copyfileobj(tarfile.open('/tmp/7z.tar.xz').extractfile('7zz'), open('/tmp/7zz', 'wb'))"
+          chmod 755 /tmp/7zz
           mkdir -p "$HOME/llvm"
           if [ ! -x "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" ]; then
             curl -fsSL --retry 3 -o /tmp/llvm.tar.zst https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.2/LLVM-23.1.2-macOS-ARM64.tar.zst
             zstd -dc --long=30 /tmp/llvm.tar.zst | /tmp/7zz x -si -ttar -y -bso0 -bsp0 -o"$HOME/llvm" 'LLVM-23.1.2-macOS-ARM64/bin/ld64.lld' 'LLVM-23.1.2-macOS-ARM64/bin/lld'
+            chmod 755 "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/lld"
             rm -f /tmp/llvm.tar.zst
           fi
-          "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" --version > /dev/null
+          "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld" --version > /dev/null || { ls -l "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin"; file "$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin/ld64.lld"; exit 1; }
 
       - name: build
         env:
@@ -275,7 +287,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\llvm
-          key: arx-llvm-llvmorg-23.1.2-windows-7z
+          key: arx-llvm-llvmorg-23.1.2-windows-7zz2
 
       - name: stable llvm linker
         shell: pwsh
@@ -374,7 +386,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~\llvm
-          key: arx-llvm-llvmorg-23.1.2-windows-7z
+          key: arx-llvm-llvmorg-23.1.2-windows-7zz2
 
       - name: stable llvm linker
         shell: pwsh
