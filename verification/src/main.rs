@@ -1,4 +1,5 @@
 #![deny(warnings)]
+#![forbid(unsafe_code)]
 
 fn main() {
     let main_source: &'static str = include_str!("../../src/main.rs");
@@ -15,6 +16,7 @@ fn main() {
     let background = basisu::Transcoder::new(background_source).expect("background ktx2");
     let menu = basisu::Transcoder::new(menu_source).expect("menu ktx2");
     let cursor = basisu::Transcoder::new(cursor_source).expect("cursor ktx2");
+    assert!(!background.has_alpha() && menu.has_alpha() && cursor.has_alpha());
 
     let sheets = [
         ("background", &background),
@@ -23,9 +25,9 @@ fn main() {
     ];
 
     let level_bytes = |source_width: u32, source_height: u32, mip: u32| -> usize {
-        (((((source_width >> mip).max(1) + 3) / 4) as usize)
-            * ((((source_height >> mip).max(1) + 3) / 4) as usize))
-            * 16
+        (((((source_width >> mip).max(1) + 3) >> 2) as usize)
+            * ((((source_height >> mip).max(1) + 3) >> 2) as usize))
+            << 4
     };
 
     let select_level_closed = |source_width: u32,
@@ -157,6 +159,35 @@ fn main() {
         );
     }
 
+    let transcode_chain = |transcoder: &basisu::Transcoder<'static>,
+                           w: u32,
+                           h: u32,
+                           lvl: u32,
+                           mips: u32|
+     -> usize {
+        let mut sizes = [0usize; 16];
+        let mut total = 0usize;
+        for (i, slot) in sizes[..mips as usize].iter_mut().enumerate() {
+            let sz = level_bytes(w, h, lvl + i as u32);
+            *slot = sz;
+            total += sz;
+        }
+        let mut buf = vec![0u8; total];
+        let mut off = 0usize;
+        for (i, &sz) in sizes[..mips as usize].iter().enumerate() {
+            transcoder
+                .transcode_into(
+                    lvl + i as u32,
+                    basisu::TargetFormat::Bc7Rgba,
+                    basisu::DecodeFlags::NONE,
+                    &mut buf[off..off + sz],
+                )
+                .expect("chain transcode");
+            off += sz;
+        }
+        total
+    };
+
     for (vw, vh) in [(1920u32, 1080u32), (3840u32, 2160u32)] {
         let width = vw as f32;
         let height = vh as f32;
@@ -185,54 +216,17 @@ fn main() {
         };
 
         let start = std::time::Instant::now();
-        let bg_bytes: usize = (0..bg_mips).map(|i| level_bytes(bg_w, bg_h, bg_lvl + i)).sum();
-        let menu_bytes: usize = (0..menu_mips)
-            .map(|i| level_bytes(menu_w, menu_h, menu_lvl + i))
-            .sum();
-        let cur_bytes: usize = (0..cur_mips)
-            .map(|i| level_bytes(cur_w, cur_h, cur_lvl + i))
-            .sum();
-        let mut bg_buf = vec![0u8; bg_bytes];
-        let mut off = 0usize;
-        for i in 0..bg_mips {
-            let sz = level_bytes(bg_w, bg_h, bg_lvl + i);
-            background
-                .transcode_into(
-                    bg_lvl + i,
-                    basisu::TargetFormat::Bc7Rgba,
-                    basisu::DecodeFlags::NONE,
-                    &mut bg_buf[off..off + sz],
-                )
-                .expect("bg chain");
-            off += sz;
-        }
-        let mut menu_buf = vec![0u8; menu_bytes];
-        off = 0;
-        for i in 0..menu_mips {
-            let sz = level_bytes(menu_w, menu_h, menu_lvl + i);
-            menu.transcode_into(
-                menu_lvl + i,
-                basisu::TargetFormat::Bc7Rgba,
-                basisu::DecodeFlags::NONE,
-                &mut menu_buf[off..off + sz],
+        let (bg_bytes, menu_bytes, cur_bytes) = std::thread::scope(|scope| {
+            let bg_job = scope.spawn(|| transcode_chain(&background, bg_w, bg_h, bg_lvl, bg_mips));
+            let menu_job =
+                scope.spawn(|| transcode_chain(&menu, menu_w, menu_h, menu_lvl, menu_mips));
+            let cur_bytes = transcode_chain(&cursor, cur_w, cur_h, cur_lvl, cur_mips);
+            (
+                bg_job.join().expect("bg join"),
+                menu_job.join().expect("menu join"),
+                cur_bytes,
             )
-            .expect("menu chain");
-            off += sz;
-        }
-        let mut cur_buf = vec![0u8; cur_bytes];
-        off = 0;
-        for i in 0..cur_mips {
-            let sz = level_bytes(cur_w, cur_h, cur_lvl + i);
-            cursor
-                .transcode_into(
-                    cur_lvl + i,
-                    basisu::TargetFormat::Bc7Rgba,
-                    basisu::DecodeFlags::NONE,
-                    &mut cur_buf[off..off + sz],
-                )
-                .expect("cursor chain");
-            off += sz;
-        }
+        });
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         let total_vram = bg_bytes + menu_bytes + cur_bytes;
         println!(
