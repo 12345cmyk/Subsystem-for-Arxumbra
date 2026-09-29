@@ -1,0 +1,206 @@
+{
+  "schema": 1,
+  "project": "Subsystem-for-Arxumbra",
+  "repository": "https://github.com/12345cmyk/Subsystem-for-Arxumbra",
+  "updated_utc": "2026-09-29T20:20:00Z",
+  "versions": [
+    {
+      "version": "v0.0.0.0.0.0-s0",
+      "status": "released",
+      "commit": "ce97d05823",
+      "dates": {
+        "commit_utc": "2026-09-07T19:53:44Z",
+        "release_published_utc": "2026-09-07T19:57:38Z"
+      },
+      "packaging": "none",
+      "total_bytes": 0,
+      "assets": [],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s1",
+      "status": "released",
+      "commit": "082899188e",
+      "dates": {
+        "commit_utc": "2026-09-07T21:23:14Z",
+        "release_published_utc": "2026-09-07T21:24:04Z"
+      },
+      "packaging": "none",
+      "total_bytes": 0,
+      "assets": [],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s2",
+      "status": "released",
+      "commit": "7c5c60bdfb",
+      "dates": {
+        "commit_utc": "2026-09-11T12:43:53Z",
+        "release_published_utc": "2026-09-11T12:44:23Z"
+      },
+      "packaging": "none",
+      "total_bytes": 0,
+      "assets": [],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s3",
+      "status": "released",
+      "commit": "519298eb6b",
+      "dates": {
+        "commit_utc": "2026-09-15T23:02:56Z",
+        "release_published_utc": "2026-09-15T23:04:43Z"
+      },
+      "packaging": "none",
+      "total_bytes": 0,
+      "assets": [],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s4",
+      "status": "released",
+      "commit": "d663116971",
+      "dates": {
+        "commit_utc": "2026-09-26T18:33:54Z",
+        "release_published_utc": "2026-09-26T18:59:51Z"
+      },
+      "packaging": "none",
+      "total_bytes": 0,
+      "assets": [],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s5",
+      "status": "released",
+      "commit": "bcd1ef1d3d",
+      "dates": {
+        "commit_utc": "2026-09-28T21:01:12Z",
+        "release_published_utc": "2026-09-28T21:01:49Z"
+      },
+      "packaging": "none",
+      "total_bytes": 0,
+      "assets": [],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s6",
+      "status": "released",
+      "commit": "22b3b76540",
+      "dates": {
+        "commit_utc": "2026-09-29T11:57:49Z",
+        "release_published_utc": "2026-09-29T12:27:07Z",
+        "assets_uploaded_utc": "2026-09-29T12:49:40Z"
+      },
+      "packaging": "tar.xz/tar.gz/zip",
+      "total_bytes": 522792888,
+      "assets": [
+        {
+          "name": "aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.xz",
+          "bytes": 81889848,
+          "sha256": "49976725b507c15bfcd972e2ff5a21b9fb673b2c16dc44cc91c635f25916f1c8"
+        },
+        {
+          "name": "aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.gz",
+          "bytes": 88699005,
+          "sha256": "a1806743000071336b6bbd1c9756d5a731cf7d50d3e1de7487ce5565fc85f405"
+        },
+        {
+          "name": "aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.zip",
+          "bytes": 88706254,
+          "sha256": "c3dbd8caaf659715ab2779133be3c7571ce8aeade9e04f4af1b7d6f9f4e6b105"
+        },
+        {
+          "name": "x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.xz",
+          "bytes": 83093260,
+          "sha256": "9282facebf837c39bb506df1c15ad922c3f2061cea0af7e1d6670262b53046d3"
+        },
+        {
+          "name": "x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.gz",
+          "bytes": 90043631,
+          "sha256": "688159299cbed1c7181b8dce40b3323f6b64114a545819f5ad980584a96733e5"
+        },
+        {
+          "name": "x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.zip",
+          "bytes": 90360760,
+          "sha256": "93557c53455c8561e3477a5809ef056d601169dbc097fcb13e6d4fb45cc22f88"
+        },
+        {
+          "name": "SHA256SUMS-x86_64.txt",
+          "bytes": 130,
+          "sha256": "de9ceef6ca4e9fe64e56ae59811ffb606f315fc2bad2d0e5ebfe77fcd477cff2"
+        }
+      ],
+      "report": null
+    },
+    {
+      "version": "v0.0.0.0.0.0-s7",
+      "status": "released",
+      "commit": "d32451b194",
+      "dates": {
+        "commit_utc": "2026-09-29T19:17:22Z",
+        "release_published_utc": "2026-09-29T19:32:13Z",
+        "assets_uploaded_utc": "2026-09-29T19:56:25Z"
+      },
+      "run": {
+        "id": 36619941000,
+        "conclusion": "success",
+        "total_minutes": 24.3
+      },
+      "packaging": "7z",
+      "total_bytes": 484399067,
+      "assets": [
+        {
+          "name": "aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z",
+          "bytes": 80372011,
+          "sha256": "140d802c849ff2594759e20a34f7c91d578745e51c19fe6daabddb8aee869a70"
+        },
+        {
+          "name": "aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z",
+          "bytes": 80221354,
+          "sha256": "033b979598e85d3ca343fbbdd7547044178fdd9a3e12512e8c9f0dc4246bc648"
+        },
+        {
+          "name": "aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z",
+          "bytes": 80093903,
+          "sha256": "e19de9f49ce1f5ad814b408179be2f4b13e62cb12fcc8b41ec814798e50c90ec"
+        },
+        {
+          "name": "x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z",
+          "bytes": 81871934,
+          "sha256": "7f5f1f293f72438c7f11900f31c5e94749110ef1569a33a85b4c5f1b25f51767"
+        },
+        {
+          "name": "x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z",
+          "bytes": 80752956,
+          "sha256": "d614fd3e13227d662a6483bba72ff7913350127989e032daee681cb6ae50c1a2"
+        },
+        {
+          "name": "x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z",
+          "bytes": 81086909,
+          "sha256": "41677f7b4d06827cd83046679b401f3538697f49f80346c245170d483ef99a36"
+        }
+      ],
+      "report": "reports/v0.0.0.0.0.0-s7.md"
+    },
+    {
+      "version": "v0.0.0.0.0.0-s8",
+      "cargo_version": "0.0.8",
+      "source": "v0.0.0.0.0.0-s7",
+      "status": "candidate",
+      "commit": "STATUS: PENDING RELEASE RUN",
+      "dates": {
+        "commit_utc": "2026-09-29T20:20:00Z",
+        "release_published_utc": "STATUS: PENDING RELEASE RUN",
+        "assets_uploaded_utc": "STATUS: PENDING RELEASE RUN"
+      },
+      "run": {
+        "id": "STATUS: PENDING RELEASE RUN",
+        "conclusion": "STATUS: PENDING RELEASE RUN",
+        "total_minutes": "STATUS: PENDING RELEASE RUN"
+      },
+      "packaging": "7z",
+      "assets": [],
+      "report": "reports/v0.0.0.0.0.0-s8.md"
+    }
+  ]
+}

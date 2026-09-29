@@ -39,6 +39,9 @@ fn main() {
     let mut cursor_velocity = bevy::math::Vec2::ZERO;
     let mut idle_deadline: Option<std::time::Instant> = None;
     let mut escape_since: Option<std::time::Instant> = None;
+    let fullscreen = bevy::window::WindowMode::BorderlessFullscreen(
+        bevy::window::MonitorSelection::Primary,
+    );
     #[cfg(target_os = "linux")]
     let backends = bevy::render::settings::Backends::VULKAN;
     #[cfg(target_os = "macos")]
@@ -61,9 +64,7 @@ fn main() {
                 bevy::input_focus::InputFocusPlugin,
                 bevy::window::WindowPlugin {
                     primary_window: Some(bevy::window::Window {
-                        mode: bevy::window::WindowMode::BorderlessFullscreen(
-                            bevy::window::MonitorSelection::Primary,
-                        ),
+                        mode: fullscreen,
                         present_mode: bevy::window::PresentMode::Mailbox,
                         desired_maximum_frame_latency: std::num::NonZero::new(1),
                         resizable: false,
@@ -141,14 +142,8 @@ fn main() {
                 let delta = time.delta_secs().min(0.05);
                 let booting = phase == 0;
                 let mut window = windows.single_mut().expect("primary window");
-                if window.mode
-                    != bevy::window::WindowMode::BorderlessFullscreen(
-                        bevy::window::MonitorSelection::Primary,
-                    )
-                {
-                    window.mode = bevy::window::WindowMode::BorderlessFullscreen(
-                        bevy::window::MonitorSelection::Primary,
-                    );
+                if window.mode != fullscreen {
+                    window.mode = fullscreen;
                 }
                 if window.decorations {
                     window.decorations = false;
@@ -171,28 +166,44 @@ fn main() {
                 if physical_width == 0 || physical_height == 0 {
                     return;
                 }
+                let width = physical_width as f32;
+                let height = physical_height as f32;
+                let panel_width = width * 0.21;
+                let panel_open_x = panel_width * 0.5 - width * 0.5;
+                let panel_closed_x = panel_open_x - panel_width * 1.05;
+                let cursor_extent = (height * 0.055).clamp(28.0, 320.0);
+                let cover = (width / background_width as f32).max(height / background_height as f32);
+                let background_size =
+                    bevy::math::Vec2::new(background_width as f32, background_height as f32);
                 let geometry_changed = (physical_width, physical_height) != viewport;
                 if booting || geometry_changed {
-                    let width = physical_width as f32;
-                    let height = physical_height as f32;
-                    let panel_width = width * 0.21;
-                    let cursor_extent = (height * 0.055).clamp(28.0, 320.0);
-                    let cover = (width / background_width as f32).max(height / background_height as f32);
-                    let background_target_level = (31
-                        - (((background_width / physical_width)
-                            .min(background_height / physical_height))
-                        .max(1))
-                        .leading_zeros())
-                    .min(background_levels - 1);
-                    let menu_target_level = (31
-                        - (((menu_width / (panel_width.ceil() as u32).max(1))
-                            .min(menu_height / physical_height))
-                        .max(1))
-                        .leading_zeros())
-                    .min(menu_levels - 1);
-                    let cursor_target_level = (31
-                        - ((cursor_width / (cursor_extent.ceil() as u32).max(1)).max(1)).leading_zeros())
-                    .min(cursor_levels - 1);
+                    let select_level =
+                        |source_width: u32, source_height: u32, levels: u32, need_width: u32, need_height: u32| -> u32 {
+                            (31 - (((source_width / need_width).min(source_height / need_height)).max(1)).leading_zeros()).min(levels - 1)
+                        };
+                    let panel_need = (panel_width.ceil() as u32).max(1);
+                    let cursor_need = (cursor_extent.ceil() as u32).max(1);
+                    let background_target_level = select_level(
+                        background_width,
+                        background_height,
+                        background_levels,
+                        physical_width,
+                        physical_height,
+                    );
+                    let menu_target_level = select_level(
+                        menu_width,
+                        menu_height,
+                        menu_levels,
+                        panel_need,
+                        physical_height,
+                    );
+                    let cursor_target_level = select_level(
+                        cursor_width,
+                        cursor_height,
+                        cursor_levels,
+                        cursor_need,
+                        cursor_need,
+                    );
                     let background_target_mips = if cover >= 1.0 {
                         1
                     } else {
@@ -213,250 +224,190 @@ fn main() {
                     } else {
                         cursor_levels - cursor_target_level
                     };
-                    let background_stale =
-                        (background_target_level, background_target_mips) != (background_level, background_mips);
-                    let menu_stale = (menu_target_level, menu_target_mips) != (menu_level, menu_mips);
+                    let background_stale = (background_target_level, background_target_mips)
+                        != (background_level, background_mips);
+                    let menu_stale =
+                        (menu_target_level, menu_target_mips) != (menu_level, menu_mips);
                     let cursor_stale =
                         (cursor_target_level, cursor_target_mips) != (cursor_level, cursor_mips);
                     if background_stale || menu_stale || cursor_stale {
-                        let (background_pixels, menu_pixels, cursor_pixels) = std::thread::scope(|scope| {
-                            let background_job = background_stale.then(|| {
-                                scope.spawn(|| {
-                                    let mut pixels = vec![
-                                        0u8;
-                                        (0..background_target_mips)
-                                            .map(|i| {
-                                                (((((background_width >> (background_target_level + i))
-                                                    .max(1)
-                                                    + 3)
-                                                    / 4) as usize)
-                                                    * ((((background_height >> (background_target_level + i))
-                                                        .max(1)
-                                                        + 3)
-                                                        / 4)
-                                                        as usize))
-                                                    * 16
-                                            })
-                                            .sum::<usize>()
-                                    ];
-                                    let mut offset = 0usize;
-                                    for i in 0..background_target_mips {
-                                        let size = (((((background_width >> (background_target_level + i))
-                                            .max(1)
-                                            + 3)
-                                            / 4) as usize)
-                                            * ((((background_height >> (background_target_level + i))
-                                                .max(1)
-                                                + 3)
-                                                / 4)
-                                                as usize))
-                                            * 16;
-                                        background
-                                            .transcode_into(
-                                                background_target_level + i,
-                                                basisu::TargetFormat::Bc7Rgba,
-                                                basisu::DecodeFlags::NONE,
-                                                &mut pixels[offset..offset + size],
-                                            )
-                                            .expect("background ktx2 bc7 transcode");
-                                        offset += size;
-                                    }
-                                    pixels
-                                })
-                            });
-                            let menu_job = menu_stale.then(|| {
-                                scope.spawn(|| {
-                                    let mut pixels = vec![
-                                        0u8;
-                                        (0..menu_target_mips)
-                                            .map(|i| {
-                                                (((((menu_width >> (menu_target_level + i)).max(1) + 3) / 4)
-                                                    as usize)
-                                                    * ((((menu_height >> (menu_target_level + i))
-                                                        .max(1)
-                                                        + 3)
-                                                        / 4)
-                                                        as usize))
-                                                    * 16
-                                            })
-                                            .sum::<usize>()
-                                    ];
-                                    let mut offset = 0usize;
-                                    for i in 0..menu_target_mips {
-                                        let size = (((((menu_width >> (menu_target_level + i)).max(1) + 3) / 4)
-                                            as usize)
-                                            * ((((menu_height >> (menu_target_level + i)).max(1) + 3) / 4)
-                                                as usize))
-                                            * 16;
-                                        menu.transcode_into(
-                                            menu_target_level + i,
-                                            basisu::TargetFormat::Bc7Rgba,
-                                            basisu::DecodeFlags::NONE,
-                                            &mut pixels[offset..offset + size],
+                        let level_bytes = |source_width: u32, source_height: u32, mip: u32| -> usize {
+                            (((((source_width >> mip).max(1) + 3) / 4) as usize)
+                                * ((((source_height >> mip).max(1) + 3) / 4) as usize))
+                                * 16
+                        };
+                        let transcode_chain = |transcoder: &basisu::Transcoder<'static>,
+                                               source_width: u32,
+                                               source_height: u32,
+                                               level: u32,
+                                               mips: u32,
+                                               label: &'static str|
+                         -> Vec<u8> {
+                            let mut pixels = vec![
+                                0u8;
+                                (0..mips)
+                                    .map(|i| level_bytes(source_width, source_height, level + i))
+                                    .sum::<usize>()
+                            ];
+                            let mut offset = 0usize;
+                            for i in 0..mips {
+                                let size = level_bytes(source_width, source_height, level + i);
+                                transcoder
+                                    .transcode_into(
+                                        level + i,
+                                        basisu::TargetFormat::Bc7Rgba,
+                                        basisu::DecodeFlags::NONE,
+                                        &mut pixels[offset..offset + size],
+                                    )
+                                    .expect(label);
+                                offset += size;
+                            }
+                            pixels
+                        };
+                        let (background_pixels, menu_pixels, cursor_pixels) =
+                            std::thread::scope(|scope| {
+                                let background_job = background_stale.then(|| {
+                                    scope.spawn(|| {
+                                        transcode_chain(
+                                            &background,
+                                            background_width,
+                                            background_height,
+                                            background_target_level,
+                                            background_target_mips,
+                                            "background ktx2 bc7 transcode",
                                         )
-                                        .expect("menu ktx2 bc7 transcode");
-                                        offset += size;
-                                    }
-                                    pixels
-                                })
+                                    })
+                                });
+                                let menu_job = menu_stale.then(|| {
+                                    scope.spawn(|| {
+                                        transcode_chain(
+                                            &menu,
+                                            menu_width,
+                                            menu_height,
+                                            menu_target_level,
+                                            menu_target_mips,
+                                            "menu ktx2 bc7 transcode",
+                                        )
+                                    })
+                                });
+                                let cursor_job = cursor_stale.then(|| {
+                                    scope.spawn(|| {
+                                        transcode_chain(
+                                            &cursor,
+                                            cursor_width,
+                                            cursor_height,
+                                            cursor_target_level,
+                                            cursor_target_mips,
+                                            "cursor ktx2 bc7 transcode",
+                                        )
+                                    })
+                                });
+                                (
+                                    background_job
+                                        .map(|job| job.join().expect("background ktx2 decode")),
+                                    menu_job.map(|job| job.join().expect("menu ktx2 decode")),
+                                    cursor_job.map(|job| job.join().expect("cursor ktx2 decode")),
+                                )
                             });
-                            let cursor_job = cursor_stale.then(|| {
-                                scope.spawn(|| {
-                                    let mut pixels = vec![
-                                        0u8;
-                                        (0..cursor_target_mips)
-                                            .map(|i| {
-                                                (((((cursor_width >> (cursor_target_level + i)).max(1) + 3) / 4)
-                                                    as usize)
-                                                    * ((((cursor_height >> (cursor_target_level + i))
-                                                        .max(1)
-                                                        + 3)
-                                                        / 4)
-                                                        as usize))
-                                                    * 16
-                                            })
-                                            .sum::<usize>()
-                                    ];
-                                    let mut offset = 0usize;
-                                    for i in 0..cursor_target_mips {
-                                        let size = (((((cursor_width >> (cursor_target_level + i)).max(1) + 3) / 4)
-                                            as usize)
-                                            * ((((cursor_height >> (cursor_target_level + i)).max(1) + 3) / 4)
-                                                as usize))
-                                            * 16;
-                                        cursor
-                                            .transcode_into(
-                                                cursor_target_level + i,
-                                                basisu::TargetFormat::Bc7Rgba,
-                                                basisu::DecodeFlags::NONE,
-                                                &mut pixels[offset..offset + size],
-                                            )
-                                            .expect("cursor ktx2 bc7 transcode");
-                                        offset += size;
-                                    }
-                                    pixels
-                                })
-                            });
+                        let build_image = |source_width: u32,
+                                           source_height: u32,
+                                           level: u32,
+                                           mips: u32,
+                                           pixels: Vec<u8>|
+                         -> bevy::image::Image {
+                            let mut image = bevy::image::Image::new(
+                                bevy::render::render_resource::Extent3d {
+                                    width: (source_width >> level).max(1),
+                                    height: (source_height >> level).max(1),
+                                    depth_or_array_layers: 1,
+                                },
+                                bevy::render::render_resource::TextureDimension::D2,
+                                pixels,
+                                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+                                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+                            );
+                            image.texture_descriptor.mip_level_count = mips;
+                            image.sampler = bevy::image::ImageSampler::Descriptor(
+                                bevy::render::render_resource::SamplerDescriptor {
+                                    address_mode_u:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_v:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    address_mode_w:
+                                        bevy::render::render_resource::AddressMode::ClampToEdge,
+                                    mag_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    min_filter: bevy::render::render_resource::FilterMode::Linear,
+                                    mipmap_filter:
+                                        bevy::render::render_resource::MipmapFilterMode::Linear,
+                                    ..Default::default()
+                                }
+                                .into(),
+                            );
+                            image
+                        };
+                        for (
+                            pixels,
+                            source_width,
+                            source_height,
+                            target_level,
+                            target_mips,
+                            handle,
+                            level_slot,
+                            mips_slot,
+                            entity,
+                        ) in [
                             (
-                                background_job.map(|job| job.join().expect("background ktx2 decode")),
-                                menu_job.map(|job| job.join().expect("menu ktx2 decode")),
-                                cursor_job.map(|job| job.join().expect("cursor ktx2 decode")),
-                            )
-                        });
-                        if let Some(pixels) = background_pixels {
-                            let retired = background_handle.replace(images.add({
-                                let mut image = bevy::image::Image::new(
-                                    bevy::render::render_resource::Extent3d {
-                                        width: (background_width >> background_target_level).max(1),
-                                        height: (background_height >> background_target_level).max(1),
-                                        depth_or_array_layers: 1,
-                                    },
-                                    bevy::render::render_resource::TextureDimension::D2,
+                                background_pixels,
+                                background_width,
+                                background_height,
+                                background_target_level,
+                                background_target_mips,
+                                &mut background_handle,
+                                &mut background_level,
+                                &mut background_mips,
+                                background_entity,
+                            ),
+                            (
+                                menu_pixels,
+                                menu_width,
+                                menu_height,
+                                menu_target_level,
+                                menu_target_mips,
+                                &mut panel_handle,
+                                &mut menu_level,
+                                &mut menu_mips,
+                                panel_entity,
+                            ),
+                            (
+                                cursor_pixels,
+                                cursor_width,
+                                cursor_height,
+                                cursor_target_level,
+                                cursor_target_mips,
+                                &mut cursor_handle,
+                                &mut cursor_level,
+                                &mut cursor_mips,
+                                cursor_entity,
+                            ),
+                        ] {
+                            if let Some(pixels) = pixels {
+                                let next = images.add(build_image(
+                                    source_width,
+                                    source_height,
+                                    target_level,
+                                    target_mips,
                                     pixels,
-                                    bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-                                    bevy::asset::RenderAssetUsages::RENDER_WORLD,
-                                );
-                                image.texture_descriptor.mip_level_count = background_target_mips;
-                                image.sampler = bevy::image::ImageSampler::Descriptor(
-                                    bevy::render::render_resource::SamplerDescriptor {
-                                        address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        mag_filter: bevy::render::render_resource::FilterMode::Linear,
-                                        min_filter: bevy::render::render_resource::FilterMode::Linear,
-                                        mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                                        ..Default::default()
+                                ));
+                                let retired = handle.replace(next.clone());
+                                *level_slot = target_level;
+                                *mips_slot = target_mips;
+                                if !booting {
+                                    if let Ok((_, mut sprite, _)) = sprites.get_mut(entity) {
+                                        sprite.image = next;
                                     }
-                                    .into(),
-                                );
-                                image
-                            }));
-                            background_level = background_target_level;
-                            background_mips = background_target_mips;
-                            if !booting {
-                                if let Ok((_, mut sprite, _)) = sprites.get_mut(background_entity) {
-                                    sprite.image = background_handle.clone().expect("background handle");
-                                }
-                                if let Some(retired) = retired {
-                                    images.remove(&retired);
-                                }
-                            }
-                        }
-                        if let Some(pixels) = menu_pixels {
-                            let retired = panel_handle.replace(images.add({
-                                let mut image = bevy::image::Image::new(
-                                    bevy::render::render_resource::Extent3d {
-                                        width: (menu_width >> menu_target_level).max(1),
-                                        height: (menu_height >> menu_target_level).max(1),
-                                        depth_or_array_layers: 1,
-                                    },
-                                    bevy::render::render_resource::TextureDimension::D2,
-                                    pixels,
-                                    bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-                                    bevy::asset::RenderAssetUsages::RENDER_WORLD,
-                                );
-                                image.texture_descriptor.mip_level_count = menu_target_mips;
-                                image.sampler = bevy::image::ImageSampler::Descriptor(
-                                    bevy::render::render_resource::SamplerDescriptor {
-                                        address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        mag_filter: bevy::render::render_resource::FilterMode::Linear,
-                                        min_filter: bevy::render::render_resource::FilterMode::Linear,
-                                        mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                                        ..Default::default()
+                                    if let Some(retired) = retired {
+                                        images.remove(&retired);
                                     }
-                                    .into(),
-                                );
-                                image
-                            }));
-                            menu_level = menu_target_level;
-                            menu_mips = menu_target_mips;
-                            if !booting {
-                                if let Ok((_, mut sprite, _)) = sprites.get_mut(panel_entity) {
-                                    sprite.image = panel_handle.clone().expect("panel handle");
-                                }
-                                if let Some(retired) = retired {
-                                    images.remove(&retired);
-                                }
-                            }
-                        }
-                        if let Some(pixels) = cursor_pixels {
-                            let retired = cursor_handle.replace(images.add({
-                                let mut image = bevy::image::Image::new(
-                                    bevy::render::render_resource::Extent3d {
-                                        width: (cursor_width >> cursor_target_level).max(1),
-                                        height: (cursor_height >> cursor_target_level).max(1),
-                                        depth_or_array_layers: 1,
-                                    },
-                                    bevy::render::render_resource::TextureDimension::D2,
-                                    pixels,
-                                    bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-                                    bevy::asset::RenderAssetUsages::RENDER_WORLD,
-                                );
-                                image.texture_descriptor.mip_level_count = cursor_target_mips;
-                                image.sampler = bevy::image::ImageSampler::Descriptor(
-                                    bevy::render::render_resource::SamplerDescriptor {
-                                        address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-                                        mag_filter: bevy::render::render_resource::FilterMode::Linear,
-                                        min_filter: bevy::render::render_resource::FilterMode::Linear,
-                                        mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                                        ..Default::default()
-                                    }
-                                    .into(),
-                                );
-                                image
-                            }));
-                            cursor_level = cursor_target_level;
-                            cursor_mips = cursor_target_mips;
-                            if !booting {
-                                if let Ok((_, mut sprite, _)) = sprites.get_mut(cursor_entity) {
-                                    sprite.image = cursor_handle.clone().expect("cursor handle");
-                                }
-                                if let Some(retired) = retired {
-                                    images.remove(&retired);
                                 }
                             }
                         }
@@ -470,10 +421,13 @@ fn main() {
                     ) else {
                         return;
                     };
-                    let width = physical_width as f32;
-                    let height = physical_height as f32;
-                    let panel_width = width * 0.21;
-                    let cursor_extent = (height * 0.055).clamp(28.0, 320.0);
+                    let alpha_mode = |has_alpha: bool| {
+                        if has_alpha {
+                            bevy::sprite::SpriteAlphaMode::Blend
+                        } else {
+                            bevy::sprite::SpriteAlphaMode::Opaque
+                        }
+                    };
                     commands.spawn((
                         bevy::camera::Camera2d,
                         bevy::camera::Camera {
@@ -488,22 +442,14 @@ fn main() {
                         .spawn((
                             bevy::sprite::Sprite {
                                 image: background_current.clone(),
-                                custom_size: Some(bevy::math::Vec2::new(
-                                    background_width as f32,
-                                    background_height as f32,
-                                )),
+                                custom_size: Some(background_size),
                                 color: bevy::color::Color::WHITE,
-                                alpha_mode: if background.has_alpha() {
-                                    bevy::sprite::SpriteAlphaMode::Blend
-                                } else {
-                                    bevy::sprite::SpriteAlphaMode::Opaque
-                                },
+                                alpha_mode: alpha_mode(background.has_alpha()),
                                 ..Default::default()
                             },
-                            bevy::transform::components::Transform::from_scale(bevy::math::Vec3::splat(
-                                (width / background_width as f32)
-                                    .max(height / background_height as f32),
-                            )),
+                            bevy::transform::components::Transform::from_scale(
+                                bevy::math::Vec3::splat(cover),
+                            ),
                             bevy::camera::visibility::Visibility::Visible,
                         ))
                         .id();
@@ -513,15 +459,11 @@ fn main() {
                                 image: panel_current.clone(),
                                 custom_size: Some(bevy::math::Vec2::new(panel_width, height)),
                                 color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.0),
-                                alpha_mode: if menu.has_alpha() {
-                                    bevy::sprite::SpriteAlphaMode::Blend
-                                } else {
-                                    bevy::sprite::SpriteAlphaMode::Opaque
-                                },
+                                alpha_mode: alpha_mode(menu.has_alpha()),
                                 ..Default::default()
                             },
                             bevy::transform::components::Transform::from_xyz(
-                                panel_width * 0.5 - width * 0.5 - panel_width * 1.05,
+                                panel_closed_x,
                                 0.0,
                                 1.0,
                             ),
@@ -534,11 +476,7 @@ fn main() {
                                 image: cursor_current.clone(),
                                 custom_size: Some(bevy::math::Vec2::splat(cursor_extent)),
                                 color: bevy::color::Color::WHITE,
-                                alpha_mode: if cursor.has_alpha() {
-                                    bevy::sprite::SpriteAlphaMode::Blend
-                                } else {
-                                    bevy::sprite::SpriteAlphaMode::Opaque
-                                },
+                                alpha_mode: alpha_mode(cursor.has_alpha()),
                                 ..Default::default()
                             },
                             bevy::transform::components::Transform::from_xyz(0.0, 0.0, 2.0),
@@ -550,25 +488,18 @@ fn main() {
                     phase = 1;
                     idle_deadline = Some(now + std::time::Duration::from_millis(1200));
                 } else if geometry_changed {
-                    let width = physical_width as f32;
-                    let height = physical_height as f32;
-                    let panel_width = width * 0.21;
-                    let cursor_extent = (height * 0.055).clamp(28.0, 320.0);
                     if let Ok((mut transform, mut sprite, _)) = sprites.get_mut(background_entity) {
-                        transform.scale = bevy::math::Vec3::splat(
-                            (width / background_width as f32).max(height / background_height as f32),
-                        );
-                        sprite.custom_size = Some(bevy::math::Vec2::new(
-                            background_width as f32,
-                            background_height as f32,
-                        ));
+                        transform.scale = bevy::math::Vec3::splat(cover);
+                        sprite.custom_size = Some(background_size);
                     }
                     if panel_motion == 0 {
-                        if let Ok((mut transform, mut sprite, mut visibility)) = sprites.get_mut(panel_entity) {
+                        if let Ok((mut transform, mut sprite, mut visibility)) =
+                            sprites.get_mut(panel_entity)
+                        {
                             transform.translation.x = if panel_open {
-                                panel_width * 0.5 - width * 0.5
+                                panel_open_x
                             } else {
-                                panel_width * 0.5 - width * 0.5 - panel_width * 1.05
+                                panel_closed_x
                             };
                             sprite.custom_size = Some(bevy::math::Vec2::new(panel_width, height));
                             sprite.color = bevy::color::Color::srgba(
@@ -594,55 +525,37 @@ fn main() {
                 } else {
                     let control = input.pressed(bevy::input::keyboard::KeyCode::ControlLeft)
                         || input.pressed(bevy::input::keyboard::KeyCode::ControlRight);
+                    let shift = input.pressed(bevy::input::keyboard::KeyCode::ShiftLeft)
+                        || input.pressed(bevy::input::keyboard::KeyCode::ShiftRight);
+                    let toggle_panel = input.just_pressed(bevy::input::keyboard::KeyCode::F1);
+                    let exiting = input.just_pressed(bevy::input::keyboard::KeyCode::Escape);
+                    let released = input.just_released(bevy::input::keyboard::KeyCode::Escape);
                     let direction = if control {
-                        {
-                            let mut direction = bevy::math::Vec2::ZERO;
-                            if input.pressed(bevy::input::keyboard::KeyCode::KeyW)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowUp)
-                            {
-                                direction.y += 1.0;
-                            }
-                            if input.pressed(bevy::input::keyboard::KeyCode::KeyS)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowDown)
-                            {
-                                direction.y -= 1.0;
-                            }
-                            if input.pressed(bevy::input::keyboard::KeyCode::KeyA)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowLeft)
-                            {
-                                direction.x -= 1.0;
-                            }
-                            if input.pressed(bevy::input::keyboard::KeyCode::KeyD)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowRight)
-                            {
-                                direction.x += 1.0;
-                            }
-                            if direction == bevy::math::Vec2::ZERO {
-                                direction
-                            } else {
-                                direction.normalize()
-                            }
-                        }
+                        let dx = (input.pressed(bevy::input::keyboard::KeyCode::KeyD)
+                            || input.pressed(bevy::input::keyboard::KeyCode::ArrowRight))
+                            as i8
+                            - (input.pressed(bevy::input::keyboard::KeyCode::KeyA)
+                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowLeft))
+                                as i8;
+                        let dy = (input.pressed(bevy::input::keyboard::KeyCode::KeyW)
+                            || input.pressed(bevy::input::keyboard::KeyCode::ArrowUp))
+                            as i8
+                            - (input.pressed(bevy::input::keyboard::KeyCode::KeyS)
+                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowDown))
+                                as i8;
+                        bevy::math::Vec2::new(dx as f32, dy as f32).normalize_or_zero()
                     } else {
                         bevy::math::Vec2::ZERO
                     };
                     cursor_velocity += (direction
-                        * (physical_height as f32
-                            * if input.pressed(bevy::input::keyboard::KeyCode::ShiftLeft)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ShiftRight)
-                            {
-                                0.55 * 0.25
-                            } else {
-                                0.55
-                            })
+                        * (height * if shift { 0.55 * 0.25 } else { 0.55 })
                         - cursor_velocity)
                         * (1.0 - (-delta / 0.045).exp());
                     let previous = cursor_position;
                     cursor_position += cursor_velocity * delta;
-                    let cursor_extent = (physical_height as f32 * 0.055).clamp(28.0, 320.0);
                     let cursor_limit = bevy::math::Vec2::new(
-                        (physical_width as f32 * 0.5 - cursor_extent * 0.5).max(0.0),
-                        (physical_height as f32 * 0.5 - cursor_extent * 0.5).max(0.0),
+                        (width * 0.5 - cursor_extent * 0.5).max(0.0),
+                        (height * 0.5 - cursor_extent * 0.5).max(0.0),
                     );
                     cursor_position = cursor_position.max(-cursor_limit).min(cursor_limit);
                     if cursor_position != previous {
@@ -652,7 +565,7 @@ fn main() {
                             sprite.custom_size = Some(bevy::math::Vec2::splat(cursor_extent));
                         }
                     }
-                    if input.just_pressed(bevy::input::keyboard::KeyCode::F1) {
+                    if toggle_panel {
                         panel_open = !panel_open;
                         panel_motion = if panel_open { 1 } else { -1 };
                     }
@@ -667,12 +580,11 @@ fn main() {
                             * progress
                             * progress
                             * (progress * (progress * 6.0 - 15.0) + 10.0);
-                        if let Ok((mut transform, mut sprite, mut visibility)) = sprites.get_mut(panel_entity) {
-                            let width = physical_width as f32;
-                            let height = physical_height as f32;
-                            let panel_width = width * 0.21;
-                            let closed = panel_width * 0.5 - width * 0.5 - panel_width * 1.05;
-                            transform.translation.x = closed + ((panel_width * 0.5 - width * 0.5) - closed) * eased;
+                        if let Ok((mut transform, mut sprite, mut visibility)) =
+                            sprites.get_mut(panel_entity)
+                        {
+                            transform.translation.x =
+                                panel_closed_x + (panel_open_x - panel_closed_x) * eased;
                             sprite.custom_size = Some(bevy::math::Vec2::new(panel_width, height));
                             sprite.color = bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.92 * eased);
                             if progress > 0.0 {
@@ -685,12 +597,12 @@ fn main() {
                                 panel_drawn = false;
                             }
                         }
-                        if (panel_motion > 0 && progress >= 1.0) || (panel_motion < 0 && progress <= 0.0) {
+                        if (panel_motion > 0 && progress >= 1.0)
+                            || (panel_motion < 0 && progress <= 0.0)
+                        {
                             panel_motion = 0;
                         }
                     }
-                    let exiting = input.just_pressed(bevy::input::keyboard::KeyCode::Escape);
-                    let released = input.just_released(bevy::input::keyboard::KeyCode::Escape);
                     if exiting {
                         escape_since = Some(now);
                     }
@@ -718,10 +630,11 @@ fn main() {
                     } else if phase == 1 {
                         if let Some(deadline) = idle_deadline {
                             if deadline <= now {
-                                winit.focused_mode =
-                                    bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs(1));
-                                winit.unfocused_mode =
-                                    bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs(1));
+                                let low_power = bevy::winit::UpdateMode::reactive_low_power(
+                                    std::time::Duration::from_secs(1),
+                                );
+                                winit.focused_mode = low_power;
+                                winit.unfocused_mode = low_power;
                                 idle_deadline = None;
                                 phase = 2;
                             }
