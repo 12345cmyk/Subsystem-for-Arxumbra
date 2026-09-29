@@ -16,7 +16,7 @@ concurrency:
 jobs:
   linux-aarch64:
     name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-22.04-arm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7.0.1
@@ -44,11 +44,12 @@ jobs:
             tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 --wildcards '*/bin/ld.lld' '*/bin/lld'
             rm -f /tmp/llvm.tar.xz
           fi
+          "$HOME/llvm/bin/ld.lld" --version > /dev/null
 
       - name: build
         run: |
           RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
-            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu -Zbuild-std=std,panic_abort
+            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
 
       - name: package
         run: |
@@ -94,11 +95,12 @@ jobs:
             tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 --wildcards '*/bin/ld.lld' '*/bin/lld'
             rm -f /tmp/llvm.tar.xz
           fi
+          "$HOME/llvm/bin/ld.lld" --version > /dev/null
 
       - name: build
         run: |
           RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
-            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu -Zbuild-std=std,panic_abort
+            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
 
       - name: package
         run: |
@@ -143,7 +145,7 @@ jobs:
       - name: build
         run: |
           RUSTFLAGS="-C target-cpu=apple-m1 -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
-            cargo build --release --locked --quiet --target aarch64-apple-darwin -Zbuild-std=std,panic_abort
+            cargo build --release --locked --quiet --target aarch64-apple-darwin '-Zbuild-std=std,panic_abort'
 
       - name: package
         run: |
@@ -188,7 +190,7 @@ jobs:
       - name: build
         run: |
           RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
-            cargo build --release --locked --quiet --target x86_64-apple-darwin -Zbuild-std=std,panic_abort
+            cargo build --release --locked --quiet --target x86_64-apple-darwin '-Zbuild-std=std,panic_abort'
 
       - name: package
         run: |
@@ -266,7 +268,7 @@ jobs:
         run: |
           $env:XWIN_CACHE_DIR = "$HOME\xwin"
           $env:RUSTFLAGS = '-C target-cpu=generic -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
-          cargo xwin build --release --locked --quiet --target aarch64-pc-windows-msvc -Zbuild-std=std,panic_abort
+          cargo xwin build --release --locked --quiet --target aarch64-pc-windows-msvc '-Zbuild-std=std,panic_abort'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: package
@@ -323,7 +325,7 @@ jobs:
         shell: pwsh
         run: |
           $env:RUSTFLAGS = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
-          cargo build --release --locked --quiet --target x86_64-pc-windows-msvc -Zbuild-std=std,panic_abort
+          cargo build --release --locked --quiet --target x86_64-pc-windows-msvc '-Zbuild-std=std,panic_abort'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: package
