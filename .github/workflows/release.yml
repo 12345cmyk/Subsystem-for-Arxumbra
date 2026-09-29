@@ -54,81 +54,14 @@ jobs:
           rustup target add ${{ matrix.target }}
           rustc -vV
 
-      - name: Stage 2 - resolve LLVM prerelease tag from GitHub
-        id: llvm
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="$(curl -fsSL --retry 3 \
-            -H 'Accept: application/vnd.github+json' \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
-            | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
-          [ -n "$TAG" ] || { echo "::error::ни одного LLVM prerelease не найдено"; exit 1; }
-          echo "LLVM prerelease: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Stage 2a - cache LLVM prerelease payload
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/arx-llvm
-          key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-${{ matrix.llvm_asset }}
-
-      - name: Stage 2b - materialize LLVM prerelease linker (GitHub release asset)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
-          ARX_LLVM_ASSET: ${{ matrix.llvm_asset }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.llvm.outputs.tag }}"
-          mkdir -p "$ARX_LLVM_ROOT/bin"
-          if [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ]; then
-            echo "LLVM $TAG уже распакован (кэш)"
-          else
-            ASSET="$(curl -fsSL --retry 3 \
-              -H 'Accept: application/vnd.github+json' \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$LLVM_REPO/releases/tags/$TAG" \
-              | ARX_LLVM_ASSET="$ARX_LLVM_ASSET" python3 -c 'import json,os,sys; names=[a["name"] for a in json.load(sys.stdin)["assets"]]; xz=[n for n in names if os.environ["ARX_LLVM_ASSET"] in n and n.endswith(".tar.xz")]; print(sorted(xz)[0] if xz else "")')"
-            [ -n "$ASSET" ] || { echo "::error::в релизе $TAG нет ассета $ARX_LLVM_ASSET.tar.xz"; exit 1; }
-            echo "asset: $ASSET"
-            curl -fL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/arx-llvm.tar.xz" \
-              "https://github.com/$LLVM_REPO/releases/download/$TAG/$ASSET"
-            tar -xJf "$RUNNER_TEMP/arx-llvm.tar.xz" -C "$ARX_LLVM_ROOT" --strip-components=1 \
-              --wildcards '*/bin/ld.lld' '*/bin/lld' '*/bin/clang' '*/bin/clang++'
-            rm -f "$RUNNER_TEMP/arx-llvm.tar.xz"
-          fi
-          "$ARX_LLVM_ROOT/bin/ld.lld" --version
-
-      - name: Stage 2c - linker probe (prerelease lld + ICF)
-        env:
-          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
-        run: |
-          set -euo pipefail
-          [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ] || { echo "::error::prerelease ld.lld не найден"; exit 1; }
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then PROBE_CC="aarch64-linux-gnu-gcc"; else PROBE_CC="cc"; fi
-          PROBE_FLAGS='-Wl,-O1 -Wl,--as-needed -Wl,--gc-sections -Wl,-z,norelro -Wl,--build-id=none -Wl,--no-eh-frame-hdr'
-          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
-          if $PROBE_CC -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,--icf=all $PROBE_FLAGS \
-               "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
-            echo "линкер: prerelease lld из GitHub ($("$ARX_LLVM_ROOT/bin/ld.lld" --version | head -1)) + ICF"
-            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin -C link-arg=-Wl,--icf=all" >> "$GITHUB_ENV"
-          else
-            echo "::error::prerelease lld не залинковал пробу:"
-            cat "$RUNNER_TEMP/arx_probe.err"
-            exit 1
-          fi
-
-      - name: Stage 3 - system dependencies
+      - name: Stage 2 - system dependencies
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             libwayland-dev libxkbcommon-dev pkg-config \
             weston mesa-vulkan-drivers xz-utils file
 
-      - name: Stage 3a - aarch64 cross toolchain + target libraries
+      - name: Stage 2a - aarch64 cross toolchain + target libraries
         if: matrix.cross
         run: |
           sudo dpkg --add-architecture arm64
@@ -158,6 +91,73 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Stage 3 - resolve LLVM prerelease tag from GitHub
+        id: llvm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$(curl -fsSL --retry 3 \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
+            | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
+          [ -n "$TAG" ] || { echo "::error::ни одного LLVM prerelease не найдено"; exit 1; }
+          echo "LLVM prerelease: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Stage 3a - cache LLVM prerelease payload
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/arx-llvm
+          key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-${{ matrix.llvm_asset }}
+
+      - name: Stage 3b - materialize LLVM prerelease linker (GitHub release asset)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
+          ARX_LLVM_ASSET: ${{ matrix.llvm_asset }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.llvm.outputs.tag }}"
+          mkdir -p "$ARX_LLVM_ROOT/bin"
+          if [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ]; then
+            echo "LLVM $TAG уже распакован (кэш)"
+          else
+            ASSET="$(curl -fsSL --retry 3 \
+              -H 'Accept: application/vnd.github+json' \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$LLVM_REPO/releases/tags/$TAG" \
+              | ARX_LLVM_ASSET="$ARX_LLVM_ASSET" python3 -c 'import json,os,sys; names=[a["name"] for a in json.load(sys.stdin)["assets"]]; xz=[n for n in names if os.environ["ARX_LLVM_ASSET"] in n and n.endswith(".tar.xz")]; print(sorted(xz)[0] if xz else "")')"
+            [ -n "$ASSET" ] || { echo "::error::в релизе $TAG нет ассета $ARX_LLVM_ASSET.tar.xz"; exit 1; }
+            echo "asset: $ASSET"
+            curl -fL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/arx-llvm.tar.xz" \
+              "https://github.com/$LLVM_REPO/releases/download/$TAG/$ASSET"
+            tar -xJf "$RUNNER_TEMP/arx-llvm.tar.xz" -C "$ARX_LLVM_ROOT" --strip-components=1 \
+              --wildcards '*/bin/ld.lld' '*/bin/lld' '*/bin/clang' '*/bin/clang++'
+            rm -f "$RUNNER_TEMP/arx-llvm.tar.xz"
+          fi
+          "$ARX_LLVM_ROOT/bin/ld.lld" --version
+
+      - name: Stage 3c - linker probe (prerelease lld + ICF)
+        env:
+          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
+        run: |
+          set -euo pipefail
+          [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ] || { echo "::error::prerelease ld.lld не найден"; exit 1; }
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then PROBE_CC="aarch64-linux-gnu-gcc"; else PROBE_CC="cc"; fi
+          PROBE_FLAGS='-Wl,-O1 -Wl,--as-needed -Wl,--gc-sections -Wl,-z,norelro -Wl,--build-id=none -Wl,--no-eh-frame-hdr'
+          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
+          if $PROBE_CC -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,--icf=all $PROBE_FLAGS \
+               "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
+            echo "линкер: prerelease lld из GitHub ($("$ARX_LLVM_ROOT/bin/ld.lld" --version | head -1)) + ICF"
+            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin -C link-arg=-Wl,--icf=all" >> "$GITHUB_ENV"
+          else
+            echo "::error::prerelease lld не залинковал пробу:"
+            cat "$RUNNER_TEMP/arx_probe.err"
+            exit 1
+          fi
 
       - name: Stage 4 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
@@ -331,7 +331,7 @@ jobs:
             curl -fL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/arx-llvm.tar.xz" \
               "https://github.com/$LLVM_REPO/releases/download/$TAG/$ASSET"
             tar -xJf "$RUNNER_TEMP/arx-llvm.tar.xz" -C "$ARX_LLVM_ROOT" --strip-components=1 \
-              --wildcards '*/bin/ld64.lld' '*/bin/ld.lld' '*/bin/lld'
+              '*/bin/ld64.lld' '*/bin/ld.lld' '*/bin/lld'
             rm -f "$RUNNER_TEMP/arx-llvm.tar.xz"
           fi
           "$ARX_LLVM_ROOT/bin/ld64.lld" --version
@@ -503,15 +503,36 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 5b - build aarch64 (prerelease clang-cl + lld-link, cargo-xwin, build-std)
+      - name: Stage 5b - cache cargo-xwin
+        if: matrix.xwin
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\cargo-xwin-bin
+          key: arx-cargo-xwin-0.23.1-${{ runner.os }}
+
+      - name: Stage 5c - cargo-xwin (installed only on a cache miss)
+        if: matrix.xwin
+        shell: pwsh
+        run: |
+          $root = "$env:RUNNER_TEMP\cargo-xwin-bin"
+          if (-not (Test-Path "$root\bin\cargo-xwin.exe")) {
+            cargo install cargo-xwin --version 0.23.1 --locked --root $root
+          }
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Stage 5d - build aarch64 (prerelease lld-link via cargo-xwin, build-std)
         if: matrix.xwin
         shell: pwsh
         env:
           XWIN_CACHE_DIR: ${{ runner.temp }}\xwin-cache
         run: |
-          cargo install cargo-xwin --version 0.23.1 --locked
-          $env:RUSTFLAGS = "$env:ARX_FLAGS -Clinker=lld-link -Clink-self-contained=no"
+          $env:RUSTFLAGS = "$env:ARX_FLAGS -Clinker=lld-link"
           cargo xwin build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::prerelease lld-link не собрал aarch64, откат на линкер cargo-xwin"
+            $env:RUSTFLAGS = $env:ARX_FLAGS
+            cargo xwin build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Stage 6 - package
