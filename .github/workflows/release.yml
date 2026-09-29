@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   linux-aarch64:
-    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 90
     steps:
@@ -71,12 +71,12 @@ jobs:
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          chmod 755 aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          bin_bytes=$(( $(wc -c < aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8) ))
-          f=aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.7z
-          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          rm aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          cp ../target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          chmod 755 aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          bin_bytes=$(( $(wc -c < aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
+          f=aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
+          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          rm aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
           [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
           {
@@ -87,11 +87,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           path: dist/*
 
   linux-x86_64:
-    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
@@ -147,12 +147,12 @@ jobs:
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          chmod 755 x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          bin_bytes=$(( $(wc -c < x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8) ))
-          f=x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.7z
-          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          rm x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          cp ../target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          chmod 755 x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          bin_bytes=$(( $(wc -c < x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
+          f=x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
+          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          rm x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
           [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
           {
@@ -163,11 +163,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           path: dist/*
 
   macos-aarch64:
-    name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+    name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -215,12 +215,12 @@ jobs:
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/aarch64-apple-darwin/release/Subsystem-for-Arxumbra aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          chmod 755 aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          bin_bytes=$(( $(wc -c < aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8) ))
-          f=aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.7z
-          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          rm aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          cp ../target/aarch64-apple-darwin/release/Subsystem-for-Arxumbra aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          chmod 755 aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          bin_bytes=$(( $(wc -c < aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
+          f=aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
+          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          rm aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
           [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
           {
@@ -231,11 +231,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           path: dist/*
 
   macos-x86_64:
-    name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+    name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -283,12 +283,12 @@ jobs:
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/x86_64-apple-darwin/release/Subsystem-for-Arxumbra x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          chmod 755 x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          bin_bytes=$(( $(wc -c < x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8) ))
-          f=x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.7z
-          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
-          rm x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          cp ../target/x86_64-apple-darwin/release/Subsystem-for-Arxumbra x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          chmod 755 x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          bin_bytes=$(( $(wc -c < x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
+          f=x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
+          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          rm x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
           [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
           {
@@ -299,11 +299,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           path: dist/*
 
   windows-aarch64:
-    name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+    name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -389,14 +389,14 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Set-Location dist
-          Copy-Item ..\target\aarch64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe
-          $binBytes = (Get-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe).Length
+          Copy-Item ..\target\aarch64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
+          $binBytes = (Get-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe).Length
           $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
           if (-not $sevenZip) { $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe" }
-          $f = 'aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.7z'
-          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off $f aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe
+          $f = 'aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z'
+          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off $f aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Remove-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe
+          Remove-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
           if ((Get-Item $f).Length -lt 60MB) { throw "archive too small: $((Get-Item $f).Length)" }
           if ((Get-Item $f).Length -gt 100MB) { throw "archive too large: $((Get-Item $f).Length)" }
           "binary_bytes=$binBytes" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -405,11 +405,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           path: dist/*
 
   windows-x86_64:
-    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -473,14 +473,14 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Set-Location dist
-          Copy-Item ..\target\x86_64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe
-          $binBytes = (Get-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe).Length
+          Copy-Item ..\target\x86_64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
+          $binBytes = (Get-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe).Length
           $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
           if (-not $sevenZip) { $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe" }
-          $f = 'x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.7z'
-          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off $f x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe
+          $f = 'x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z'
+          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off $f x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Remove-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8.exe
+          Remove-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
           if ((Get-Item $f).Length -lt 60MB) { throw "archive too small: $((Get-Item $f).Length)" }
           if ((Get-Item $f).Length -gt 100MB) { throw "archive too large: $((Get-Item $f).Length)" }
           "binary_bytes=$binBytes" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -489,7 +489,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s8
+          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
           path: dist/*
 
   release:
@@ -511,7 +511,7 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v3.0.3
         with:
-          name: v0.0.0.0.0.0-s8
+          name: v0.0.0.0.0.0-s9
           files: |
             dist/*/*.7z
           fail_on_unmatched_files: true
