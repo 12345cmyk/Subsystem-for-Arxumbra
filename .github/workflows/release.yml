@@ -13,566 +13,348 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  NAME_PREFIX: Subsystem-for-Arxumbra
-  CARGO_BIN: subsystem-for-arxumbra
-  SUFFIX: -v0.0.0.0.0.0-s5
-  BUILD_STD: -Zbuild-std=std,panic_abort
-  LLVM_REPO: llvm/llvm-project
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: '0'
-  CARGO_NET_RETRY: '10'
-
 jobs:
-  Linux-Subsystem-for-Arxumbra:
-    name: ${{ matrix.arch }}-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
+  linux-x86_64:
+    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-unknown-linux-gnu
-            arch: aarch64
-            pgo: false
-            cross: true
-            llvm_asset: Linux-X64
-            verify: false
-          - target: x86_64-unknown-linux-gnu
-            arch: x86_64
-            pgo: true
-            cross: false
-            llvm_asset: Linux-X64
-            verify: true
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Stage 1 - Rust nightly toolchain
+      - name: toolchain
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src -c llvm-tools
-          rustup default nightly
-          rustup target add ${{ matrix.target }}
-          rustc -vV
+          rustup toolchain install nightly --profile minimal -c rust-src --quiet
+          rustup default nightly --quiet
+          rustup target add x86_64-unknown-linux-gnu --quiet
 
-      - name: Stage 2 - system dependencies
+      - name: system libraries
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            libwayland-dev libxkbcommon-dev pkg-config \
-            weston mesa-vulkan-drivers xz-utils file
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config xz-utils
 
-      - name: Stage 2a - aarch64 cross toolchain + target libraries
-        if: matrix.cross
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo python3 - <<'PY'
-          import glob, re, os
-          for path in glob.glob('/etc/apt/sources.list.d/*.sources') + ['/etc/apt/sources.list']:
-              if not os.path.exists(path):
-                  continue
-              text = open(path).read()
-              if path.endswith('.sources'):
-                  stanzas = []
-                  for stanza in text.split('\n\n'):
-                      if re.search(r'(?m)^Types:', stanza) and not re.search(r'(?m)^Architectures:', stanza):
-                          stanza = re.sub(r'(?m)^Types:.*$', lambda m: m.group(0) + '\nArchitectures: amd64 i386', stanza, count=1)
-                      stanzas.append(stanza)
-                  text = '\n\n'.join(stanzas)
-              else:
-                  text = re.sub(r'(?m)^deb (?!\[)', 'deb [arch=amd64,i386] ', text)
-              open(path, 'w').write(text)
-          with open('/etc/apt/sources.list.d/ubuntu-ports-arm64.list', 'w') as portslist:
-              for suite in ('noble', 'noble-updates', 'noble-security'):
-                  portslist.write('deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports %s main restricted universe multiverse\n' % suite)
-          PY
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            gcc-aarch64-linux-gnu libwayland-dev:arm64 libxkbcommon-dev:arm64
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> "$GITHUB_ENV"
-
-      - name: Stage 3 - resolve LLVM prerelease tag from GitHub
-        id: llvm
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="$(curl -fsSL --retry 3 \
-            -H 'Accept: application/vnd.github+json' \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
-            | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
-          [ -n "$TAG" ] || { echo "::error::ни одного LLVM prerelease не найдено"; exit 1; }
-          echo "LLVM prerelease: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Stage 3a - cache LLVM prerelease payload
+      - name: cached prerelease llvm
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/arx-llvm
-          key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-${{ matrix.llvm_asset }}
+          path: ~/llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-linux
 
-      - name: Stage 3b - materialize LLVM prerelease linker (GitHub release asset)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
-          ARX_LLVM_ASSET: ${{ matrix.llvm_asset }}
+      - name: prerelease llvm linker
         run: |
-          set -euo pipefail
-          TAG="${{ steps.llvm.outputs.tag }}"
-          mkdir -p "$ARX_LLVM_ROOT/bin"
-          if [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ]; then
-            echo "LLVM $TAG уже распакован (кэш)"
-          else
-            ASSET="$(curl -fsSL --retry 3 \
-              -H 'Accept: application/vnd.github+json' \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$LLVM_REPO/releases/tags/$TAG" \
-              | ARX_LLVM_ASSET="$ARX_LLVM_ASSET" python3 -c 'import json,os,sys; names=[a["name"] for a in json.load(sys.stdin)["assets"]]; xz=[n for n in names if os.environ["ARX_LLVM_ASSET"] in n and n.endswith(".tar.xz")]; print(sorted(xz)[0] if xz else "")')"
-            [ -n "$ASSET" ] || { echo "::error::в релизе $TAG нет ассета $ARX_LLVM_ASSET.tar.xz"; exit 1; }
-            echo "asset: $ASSET"
-            curl -fL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/arx-llvm.tar.xz" \
-              "https://github.com/$LLVM_REPO/releases/download/$TAG/$ASSET"
-            tar -xJf "$RUNNER_TEMP/arx-llvm.tar.xz" -C "$ARX_LLVM_ROOT" --strip-components=1 \
-              --wildcards '*/bin/ld.lld' '*/bin/lld' '*/bin/clang' '*/bin/clang++'
-            rm -f "$RUNNER_TEMP/arx-llvm.tar.xz"
-          fi
-          "$ARX_LLVM_ROOT/bin/ld.lld" --version
-
-      - name: Stage 3c - linker probe (prerelease lld + ICF)
-        env:
-          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
-        run: |
-          set -euo pipefail
-          [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ] || { echo "::error::prerelease ld.lld не найден"; exit 1; }
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then PROBE_CC="aarch64-linux-gnu-gcc"; else PROBE_CC="cc"; fi
-          PROBE_FLAGS='-Wl,-O1 -Wl,--as-needed -Wl,--gc-sections -Wl,-z,norelro -Wl,--build-id=none -Wl,--no-eh-frame-hdr'
-          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
-          if $PROBE_CC -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,--icf=all $PROBE_FLAGS \
-               "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
-            echo "линкер: prerelease lld из GitHub ($("$ARX_LLVM_ROOT/bin/ld.lld" --version | head -1)) + ICF"
-            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin -C link-arg=-Wl,--icf=all" >> "$GITHUB_ENV"
-          else
-            echo "::error::prerelease lld не залинковал пробу:"
-            cat "$RUNNER_TEMP/arx_probe.err"
-            exit 1
+          mkdir -p "$HOME/llvm/bin"
+          if [ ! -x "$HOME/llvm/bin/ld.lld" ]; then
+            curl -fsSL --retry 3 -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/LLVM-23.1.0-rc3-Linux-X64.tar.xz
+            tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 --wildcards '*/bin/ld.lld' '*/bin/lld'
+            rm -f /tmp/llvm.tar.xz
           fi
 
-      - name: Stage 4 - locked dependency fetch
-        run: cargo fetch --locked --target ${{ matrix.target }}
-
-      - name: Stage 5 - build flags (portable)
+      - name: build
         run: |
-          set -euo pipefail
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            TUNE='-C target-cpu=generic'
-          else
-            TUNE='-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
-          fi
-          OPT='-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
-          LINK='-C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr'
-          echo "ARX_FLAGS=$TUNE $LINK $OPT" >> "$GITHUB_ENV"
-          echo "flags=$TUNE $LINK $OPT"
+          RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
+            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu -Zbuild-std=std,panic_abort
 
-      - name: Stage 6a - instrumented build (PGO generate, fat LTO, build-std, prerelease lld)
-        if: matrix.pgo
+      - name: package
         run: |
-          mkdir -p pgo-profile
-          RUSTFLAGS="$ARX_FLAGS $CARGO_LINK_EXTRA -Cprofile-generate=$PWD/pgo-profile" \
-            cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
-
-      - name: Stage 6b - plain build (fat LTO, build-std, prerelease lld)
-        if: ${{ !matrix.pgo }}
-        run: |
-          RUSTFLAGS="$ARX_FLAGS $CARGO_LINK_EXTRA" \
-            cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
-
-      - name: Stage 7 - headless profile run (weston + lavapipe)
-        if: matrix.pgo
-        run: |
-          export XDG_RUNTIME_DIR=$(mktemp -d)
-          weston --backend=headless-backend.so --socket=arx-profile --idle-time=0 --width=1920 --height=1080 &
-          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-profile" ] && break; sleep 1; done
-          [ -e "$XDG_RUNTIME_DIR/arx-profile" ] || { echo "::error::weston не поднялся"; exit 1; }
-          export WAYLAND_DISPLAY=arx-profile
-          export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
-          export WGPU_BACKEND=vulkan
-          export LLVM_PROFILE_FILE="$PWD/pgo-profile/default.profraw"
-          set +e
-          timeout -s INT 25 target/${{ matrix.target }}/release/$CARGO_BIN 2>/tmp/profile.err
-          CODE=$?
-          set -e
-          [ "$CODE" = "124" ] || { echo "::error::бинарник умер раньше дедлайна (exit $CODE)"; cat /tmp/profile.err; exit 1; }
-          if grep -v "^LLVM Profile Warning:" /tmp/profile.err | grep -q .; then
-            echo "::error::профильный прогон написал в stderr:"; cat /tmp/profile.err; exit 1
-          fi
-          [ -s pgo-profile/default.profraw ] || { echo "::error::профиль PGO не собран"; exit 1; }
-
-      - name: Stage 8 - merge PGO profile
-        if: matrix.pgo
-        run: |
-          PROFDATA=$(find "$(rustc --print sysroot)/lib/rustlib" -name 'llvm-profdata' | head -1)
-          [ -x "$PROFDATA" ] || { echo "::error::llvm-profdata из sysroot не найден"; exit 1; }
-          "$PROFDATA" merge -o pgo.profdata pgo-profile/
-
-      - name: Stage 9 - PGO build (profile-use, fat LTO, prerelease lld, build-std)
-        if: matrix.pgo
-        run: |
-          RUSTFLAGS="$ARX_FLAGS $CARGO_LINK_EXTRA -Cprofile-use=$PWD/pgo.profdata" \
-            cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
-
-      - name: Stage 10 - release verification run (shipped binary, weston + lavapipe)
-        if: matrix.verify
-        run: |
-          export XDG_RUNTIME_DIR=$(mktemp -d)
-          weston --backend=headless-backend.so --socket=arx-verify --idle-time=0 --width=2560 --height=1440 &
-          for i in $(seq 1 30); do [ -e "$XDG_RUNTIME_DIR/arx-verify" ] && break; sleep 1; done
-          [ -e "$XDG_RUNTIME_DIR/arx-verify" ] || { echo "::error::weston не поднялся"; exit 1; }
-          export WAYLAND_DISPLAY=arx-verify
-          export VK_ICD_FILENAMES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
-          export WGPU_BACKEND=vulkan
-          set +e
-          timeout -s INT 25 target/${{ matrix.target }}/release/$CARGO_BIN 2>/tmp/verify.err
-          CODE=$?
-          set -e
-          [ "$CODE" = "124" ] || { echo "::error::релизный бинарник умер раньше дедлайна (exit $CODE)"; cat /tmp/verify.err; exit 1; }
-          if [ -s /tmp/verify.err ]; then
-            echo "::error::верификация написала в stderr:"; cat /tmp/verify.err; exit 1
-          fi
-
-      - name: Stage 11 - package
-        run: |
-          mkdir dist
-          FINAL="${{ matrix.arch }}-Linux-$NAME_PREFIX$SUFFIX"
-          cp target/${{ matrix.target }}/release/$CARGO_BIN "dist/$FINAL"
-          chmod 755 "dist/$FINAL"
-          tar cf - -C dist "$FINAL" | xz -9e -T0 -c > "dist/$FINAL.tar.xz"
-          rm "dist/$FINAL"
-          sha256sum dist/*.tar.xz > "dist/SHA256SUMS-${{ matrix.arch }}.txt"
-
-      - name: Stage 12 - binary identity check (ELF, architecture, stripped)
-        run: |
-          FILE_TYPE=$(file -b "target/${{ matrix.target }}/release/$CARGO_BIN")
-          echo "$FILE_TYPE"
-          case "$FILE_TYPE" in *ELF*) ;; *) echo "::error::не ELF: $FILE_TYPE"; exit 1;; esac
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then WANT="ARM aarch64"; else WANT="x86-64"; fi
-          case "$FILE_TYPE" in *"$WANT"*) ;; *) echo "::error::ожидалась архитектура $WANT: $FILE_TYPE"; exit 1;; esac
-          if readelf -S "target/${{ matrix.target }}/release/$CARGO_BIN" | grep -q 'debug'; then
-            echo "::error::в бинарнике остались debug-секции"; exit 1
-          fi
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/release/subsystem-for-arxumbra dist/x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          chmod 755 dist/x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          tar cf - -C dist x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6 | xz -9e -T0 -c > dist/x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.xz
+          rm dist/x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          sha256sum dist/*.tar.xz > dist/SHA256SUMS-x86_64.txt
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ matrix.arch }}-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
+          name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
           path: dist/*
 
-  macOS-Subsystem-for-Arxumbra:
-    name: ${{ matrix.arch }}-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
+  linux-aarch64:
+    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal -c rust-src --quiet
+          rustup default nightly --quiet
+          rustup target add aarch64-unknown-linux-gnu --quiet
+
+      - name: system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc-aarch64-linux-gnu libwayland-dev libxkbcommon-dev pkg-config xz-utils
+
+      - name: cached prerelease llvm
+        uses: actions/cache@v4
+        with:
+          path: ~/llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-linux
+
+      - name: prerelease llvm linker
+        run: |
+          mkdir -p "$HOME/llvm/bin"
+          if [ ! -x "$HOME/llvm/bin/ld.lld" ]; then
+            curl -fsSL --retry 3 -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/LLVM-23.1.0-rc3-Linux-X64.tar.xz
+            tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 --wildcards '*/bin/ld.lld' '*/bin/lld'
+            rm -f /tmp/llvm.tar.xz
+          fi
+
+      - name: build
+        run: |
+          PKG_CONFIG_ALLOW_CROSS=1 RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C linker=aarch64-linux-gnu-gcc -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
+            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu -Zbuild-std=std,panic_abort
+
+      - name: package
+        run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-gnu/release/subsystem-for-arxumbra dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          chmod 755 dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          tar cf - -C dist aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6 | xz -9e -T0 -c > dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.xz
+          rm dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          sha256sum dist/*.tar.xz > dist/SHA256SUMS-aarch64.txt
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          path: dist/*
+
+  macos-aarch64:
+    name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
     runs-on: macos-15
-    timeout-minutes: 240
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            arch: aarch64
-          - target: x86_64-apple-darwin
-            arch: x86_64
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Stage 1 - Rust nightly toolchain
+      - name: toolchain
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src
-          rustup default nightly
-          rustup target add ${{ matrix.target }}
-          rustc -vV
+          rustup toolchain install nightly --profile minimal -c rust-src --quiet
+          rustup default nightly --quiet
+          rustup target add aarch64-apple-darwin --quiet
 
-      - name: Stage 2 - resolve LLVM prerelease tag from GitHub
-        id: llvm
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          TAG="$(curl -fsSL --retry 3 \
-            -H 'Accept: application/vnd.github+json' \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
-            | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
-          [ -n "$TAG" ] || { echo "::error::ни одного LLVM prerelease не найдено"; exit 1; }
-          echo "LLVM prerelease: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Stage 2a - cache LLVM prerelease payload
+      - name: cached prerelease llvm
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/arx-llvm
-          key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-macOS-ARM64
+          path: ~/llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-macos
 
-      - name: Stage 2b - materialize LLVM prerelease linker (ld64.lld)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
+      - name: prerelease llvm linker
         run: |
-          set -euo pipefail
-          TAG="${{ steps.llvm.outputs.tag }}"
-          mkdir -p "$ARX_LLVM_ROOT/bin"
-          if [ -x "$ARX_LLVM_ROOT/bin/ld64.lld" ]; then
-            echo "LLVM $TAG уже распакован (кэш)"
-          else
-            ASSET="$(curl -fsSL --retry 3 \
-              -H 'Accept: application/vnd.github+json' \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$LLVM_REPO/releases/tags/$TAG" \
-              | python3 -c 'import json,sys; names=[a["name"] for a in json.load(sys.stdin)["assets"]]; xz=[n for n in names if "macOS-ARM64" in n and n.endswith(".tar.xz")]; print(sorted(xz)[0] if xz else "")')"
-            [ -n "$ASSET" ] || { echo "::error::в релизе $TAG нет ассета macOS-ARM64.tar.xz"; exit 1; }
-            echo "asset: $ASSET"
-            curl -fL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/arx-llvm.tar.xz" \
-              "https://github.com/$LLVM_REPO/releases/download/$TAG/$ASSET"
-            tar -xJf "$RUNNER_TEMP/arx-llvm.tar.xz" -C "$ARX_LLVM_ROOT" --strip-components=1 \
-              '*/bin/ld64.lld' '*/bin/ld.lld' '*/bin/lld'
-            rm -f "$RUNNER_TEMP/arx-llvm.tar.xz"
-          fi
-          "$ARX_LLVM_ROOT/bin/ld64.lld" --version
-
-      - name: Stage 2c - linker probe (prerelease ld64.lld)
-        env:
-          ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
-        run: |
-          set -euo pipefail
-          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
-          if [ -x "$ARX_LLVM_ROOT/bin/ld64.lld" ] && cc -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,-dead_strip \
-               "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
-            echo "линкер: prerelease ld64.lld из GitHub ($("$ARX_LLVM_ROOT/bin/ld64.lld" --version | head -1))"
-            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin" >> "$GITHUB_ENV"
-          else
-            echo "::warning::prerelease ld64.lld не залинковал пробу, остаюсь на линкере Apple:"
-            cat "$RUNNER_TEMP/arx_probe.err" || true
-            echo "CARGO_LINK_EXTRA=" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/llvm/bin"
+          if [ ! -x "$HOME/llvm/bin/ld64.lld" ]; then
+            curl -fsSL --retry 3 -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/LLVM-23.1.0-rc3-macOS-ARM64.tar.xz
+            tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 '*/bin/ld64.lld' '*/bin/ld.lld' '*/bin/lld'
+            rm -f /tmp/llvm.tar.xz
           fi
 
-      - name: Stage 3 - build flags (portable)
+      - name: build
         run: |
-          set -euo pipefail
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            TUNE='-C target-cpu=apple-m1'
-          else
-            TUNE='-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
-          fi
-          OPT='-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
-          LINK='-C link-arg=-Wl,-dead_strip -C link-arg=-Wl,-no_fixup_chains'
-          echo "ARX_FLAGS=$TUNE $LINK $OPT" >> "$GITHUB_ENV"
-          echo "flags=$TUNE $LINK $OPT"
+          RUSTFLAGS="-C target-cpu=apple-m1 -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
+            cargo build --release --locked --quiet --target aarch64-apple-darwin -Zbuild-std=std,panic_abort
 
-      - name: Stage 4 - locked dependency fetch
-        run: cargo fetch --locked --target ${{ matrix.target }}
-
-      - name: Stage 5 - build (fat LTO, build-std, prerelease ld64.lld)
+      - name: package
         run: |
-          RUSTFLAGS="$ARX_FLAGS $CARGO_LINK_EXTRA" \
-            cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
-
-      - name: Stage 6 - package
-        run: |
-          mkdir dist
-          FINAL="${{ matrix.arch }}-macOS-$NAME_PREFIX$SUFFIX"
-          cp target/${{ matrix.target }}/release/$CARGO_BIN "dist/$FINAL"
-          chmod 755 "dist/$FINAL"
-          tar czf "dist/$FINAL.tar.gz" -C dist "$FINAL"
-          rm "dist/$FINAL"
-          shasum -a 256 dist/*.tar.gz > "dist/SHA256SUMS-${{ matrix.arch }}.txt"
-
-      - name: Stage 7 - binary identity check (Mach-O, architecture)
-        run: |
-          FILE_TYPE=$(file -b "target/${{ matrix.target }}/release/$CARGO_BIN")
-          echo "$FILE_TYPE"
-          case "$FILE_TYPE" in *Mach-O*) ;; *) echo "::error::не Mach-O: $FILE_TYPE"; exit 1;; esac
-          ARCHS=$(lipo -archs "target/${{ matrix.target }}/release/$CARGO_BIN")
-          echo "$ARCHS"
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then WANT="arm64"; else WANT="x86_64"; fi
-          case "$ARCHS" in *"$WANT"*) ;; *) echo "::error::ожидалась архитектура $WANT: $ARCHS"; exit 1;; esac
+          mkdir -p dist
+          cp target/aarch64-apple-darwin/release/subsystem-for-arxumbra dist/aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          chmod 755 dist/aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          tar czf dist/aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.gz -C dist aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          rm dist/aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          shasum -a 256 dist/*.tar.gz > dist/SHA256SUMS-aarch64.txt
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ matrix.arch }}-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
+          name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
           path: dist/*
 
-  Windows-Subsystem-for-Arxumbra:
-    name: ${{ matrix.arch }}-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
-    runs-on: windows-latest
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: aarch64-pc-windows-msvc
-            arch: aarch64
-            xwin: true
-          - target: x86_64-pc-windows-msvc
-            arch: x86_64
-            xwin: false
+  macos-x86_64:
+    name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - name: Stage 1 - Rust nightly toolchain
+      - name: toolchain
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src
-          rustup default nightly
-          rustup target add ${{ matrix.target }}
-          rustc -vV
+          rustup toolchain install nightly --profile minimal -c rust-src --quiet
+          rustup default nightly --quiet
+          rustup target add x86_64-apple-darwin --quiet
 
-      - name: Stage 2 - resolve LLVM prerelease tag from GitHub
-        id: llvm
+      - name: cached prerelease llvm
+        uses: actions/cache@v4
+        with:
+          path: ~/llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-macos
+
+      - name: prerelease llvm linker
+        run: |
+          mkdir -p "$HOME/llvm/bin"
+          if [ ! -x "$HOME/llvm/bin/ld64.lld" ]; then
+            curl -fsSL --retry 3 -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/LLVM-23.1.0-rc3-macOS-ARM64.tar.xz
+            tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 '*/bin/ld64.lld' '*/bin/ld.lld' '*/bin/lld'
+            rm -f /tmp/llvm.tar.xz
+          fi
+
+      - name: build
+        run: |
+          RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
+            cargo build --release --locked --quiet --target x86_64-apple-darwin -Zbuild-std=std,panic_abort
+
+      - name: package
+        run: |
+          mkdir -p dist
+          cp target/x86_64-apple-darwin/release/subsystem-for-arxumbra dist/x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          chmod 755 dist/x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          tar czf dist/x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.gz -C dist x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          rm dist/x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          shasum -a 256 dist/*.tar.gz > dist/SHA256SUMS-x86_64.txt
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          path: dist/*
+
+  windows-x86_64:
+    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: toolchain
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
+        run: |
+          rustup toolchain install nightly --profile minimal -c rust-src --quiet
+          rustup default nightly --quiet
+          rustup target add x86_64-pc-windows-msvc --quiet
+
+      - name: cached prerelease llvm
+        uses: actions/cache@v4
+        with:
+          path: ~\llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-windows
+
+      - name: prerelease llvm linker
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force "$HOME\llvm\bin" | Out-Null
+          if (-not (Test-Path "$HOME\llvm\bin\lld-link.exe")) {
+            Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/clang+llvm-23.0.0.3-x86_64-pc-windows-msvc.tar.xz' -OutFile "$env:TEMP\llvm.tar.xz"
+            tar -xJf "$env:TEMP\llvm.tar.xz" -C "$HOME\llvm" --strip-components=1 '*/bin/lld-link.exe' '*/bin/clang-cl.exe' '*/bin/llvm-lib.exe' '*/lib/clang/*'
+            Remove-Item "$env:TEMP\llvm.tar.xz" -Force
+          }
+          "$HOME\llvm\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: build
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN" }
-          $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:LLVM_REPO/releases?per_page=100"
-          $prerelease = $releases | Where-Object { $_.prerelease -and -not $_.draft } | Sort-Object published_at -Descending
-          if (-not $prerelease) { throw 'ни одного LLVM prerelease не найдено' }
-          $tag = $prerelease[0].tag_name
-          Write-Host "LLVM prerelease: $tag"
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Stage 2a - cache LLVM prerelease payload
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}\arx-llvm
-          key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-msvc
-
-      - name: Stage 2b - materialize LLVM prerelease toolchain (clang-cl + lld-link + builtins)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $root = "$env:RUNNER_TEMP\arx-llvm"
-          $tag = '${{ steps.llvm.outputs.tag }}'
-          New-Item -ItemType Directory -Force "$root\bin" | Out-Null
-          if (-not (Test-Path "$root\bin\lld-link.exe")) {
-            $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN" }
-            $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:LLVM_REPO/releases/tags/$tag"
-            $asset = $release.assets | Where-Object { $_.name -like '*x86_64-pc-windows-msvc.tar.xz' } | Select-Object -First 1
-            if (-not $asset) { throw "в релизе $tag нет ассета x86_64-pc-windows-msvc.tar.xz" }
-            Write-Host "asset: $($asset.name)"
-            $tarball = "$env:RUNNER_TEMP\arx-llvm.tar.xz"
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tarball
-            tar -xJf $tarball -C $root --strip-components=1 "*/bin/*" "*/lib/clang/*"
-            Remove-Item $tarball -Force
-          }
-          & "$root\bin\clang-cl.exe" --version | Select-Object -First 1
-          & "$root\bin\lld-link.exe" /? 2>&1 | Select-Object -First 1
-          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-      - name: Stage 2c - cache xwin MSVC SDK payload
-        if: matrix.xwin
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}\xwin-cache
-          key: arx-xwin-0.23.1-${{ runner.os }}
-
-      - name: Stage 3 - build flags (portable)
-        shell: pwsh
-        run: |
-          if ('${{ matrix.arch }}' -eq 'aarch64') {
-            $tune = '-C target-cpu=generic'
-          } else {
-            $tune = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
-          }
-          $opt = '-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
-          $link = '-C link-arg=/OPT:REF -C link-arg=/OPT:ICF'
-          "ARX_FLAGS=$tune $link $opt" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "flags=$tune $link $opt"
-
-      - name: Stage 4 - locked dependency fetch
-        run: cargo fetch --locked --target ${{ matrix.target }}
-
-      - name: Stage 5a - build x86_64 (prerelease lld-link, fat LTO, build-std)
-        if: ${{ !matrix.xwin }}
-        shell: pwsh
-        run: |
-          $env:RUSTFLAGS = "$env:ARX_FLAGS -Clinker=lld-link"
-          cargo build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::prerelease lld-link не собрал x86_64, откат на link.exe из MSVC"
-            $env:RUSTFLAGS = $env:ARX_FLAGS
-            cargo build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
-          }
+          $env:RUSTFLAGS = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+          cargo build --release --locked --quiet --target x86_64-pc-windows-msvc -Zbuild-std=std,panic_abort
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 5b - cache cargo-xwin
-        if: matrix.xwin
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}\cargo-xwin-bin
-          key: arx-cargo-xwin-0.23.1-${{ runner.os }}
-
-      - name: Stage 5c - cargo-xwin (installed only on a cache miss)
-        if: matrix.xwin
-        shell: pwsh
-        run: |
-          $root = "$env:RUNNER_TEMP\cargo-xwin-bin"
-          if (-not (Test-Path "$root\bin\cargo-xwin.exe")) {
-            cargo install cargo-xwin --version 0.23.1 --locked --root $root
-          }
-          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-      - name: Stage 5d - build aarch64 (prerelease lld-link via cargo-xwin, build-std)
-        if: matrix.xwin
-        shell: pwsh
-        env:
-          XWIN_CACHE_DIR: ${{ runner.temp }}\xwin-cache
-        run: |
-          $env:RUSTFLAGS = "$env:ARX_FLAGS -Clinker=lld-link"
-          cargo xwin build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::prerelease lld-link не собрал aarch64, откат на линкер cargo-xwin"
-            $env:RUSTFLAGS = $env:ARX_FLAGS
-            cargo xwin build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
-          }
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Stage 6 - package
+      - name: package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $final = "${{ matrix.arch }}-Windows-$env:NAME_PREFIX$env:SUFFIX"
-          Copy-Item "target\${{ matrix.target }}\release\$env:CARGO_BIN.exe" "dist\$final.exe"
-          Compress-Archive -Path "dist\$final.exe" -DestinationPath "dist\$final.zip" -CompressionLevel Optimal
-          Remove-Item "dist\$final.exe"
-          (Get-ChildItem "dist\*.zip" | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name }) | Out-File -Encoding ascii "dist\SHA256SUMS-${{ matrix.arch }}.txt"
-
-      - name: Stage 7 - binary identity check (PE, machine type)
-        shell: pwsh
-        run: |
-          $path = "target\${{ matrix.target }}\release\$env:CARGO_BIN.exe"
-          $bytes = [System.IO.File]::ReadAllBytes($path)
-          $mz = [System.Text.Encoding]::ASCII.GetString($bytes, 0, 2)
-          if ($mz -ne 'MZ') { throw "не PE: $mz" }
-          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
-          $signature = [System.BitConverter]::ToUInt32($bytes, $peOffset)
-          if ($signature -ne 0x00004550) { throw "нет PE-сигнатуры: 0x$($signature.ToString('x8'))" }
-          $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
-          $want = if ('${{ matrix.arch }}' -eq 'aarch64') { 0xAA64 } else { 0x8664 }
-          $hex = '0x' + $machine.ToString('x4')
-          Write-Host "machine = $hex"
-          if ($machine -ne $want) { throw "ожидалась машина 0x$($want.ToString('x4')), получено $hex" }
+          Copy-Item target\x86_64-pc-windows-msvc\release\subsystem-for-arxumbra.exe dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
+          Compress-Archive -Path dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe -DestinationPath dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.zip -CompressionLevel Optimal
+          Remove-Item dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
+          (Get-ChildItem dist\*.zip | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name }) | Out-File -Encoding ascii dist\SHA256SUMS-x86_64.txt
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ matrix.arch }}-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
+          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          path: dist/*
+
+  windows-aarch64:
+    name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install nightly --profile minimal -c rust-src --quiet
+          rustup default nightly --quiet
+          rustup target add aarch64-pc-windows-msvc --quiet
+
+      - name: cached prerelease llvm
+        uses: actions/cache@v4
+        with:
+          path: ~\llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-windows
+
+      - name: prerelease llvm linker
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force "$HOME\llvm\bin" | Out-Null
+          if (-not (Test-Path "$HOME\llvm\bin\lld-link.exe")) {
+            Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/clang+llvm-23.0.0.3-x86_64-pc-windows-msvc.tar.xz' -OutFile "$env:TEMP\llvm.tar.xz"
+            tar -xJf "$env:TEMP\llvm.tar.xz" -C "$HOME\llvm" --strip-components=1 '*/bin/lld-link.exe' '*/bin/clang-cl.exe' '*/bin/llvm-lib.exe' '*/lib/clang/*'
+            Remove-Item "$env:TEMP\llvm.tar.xz" -Force
+          }
+          "$HOME\llvm\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: cached cargo-xwin
+        uses: actions/cache@v4
+        with:
+          path: ~\cargo-xwin
+          key: arx-cargo-xwin-0.23.1
+
+      - name: cached msvc sdk
+        uses: actions/cache@v4
+        with:
+          path: ~\xwin
+          key: arx-msvc-sdk-0.23.1
+
+      - name: cargo-xwin
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path "$HOME\cargo-xwin\bin\cargo-xwin.exe")) {
+            cargo install cargo-xwin --version 0.23.1 --locked --root "$HOME\cargo-xwin" --quiet
+          }
+          "$HOME\cargo-xwin\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:XWIN_CACHE_DIR = "$HOME\xwin"
+          $env:CHROME_HEADLESS = '1'
+          $env:RUSTFLAGS = '-C target-cpu=generic -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+          cargo xwin build --release --locked --quiet --target aarch64-pc-windows-msvc -Zbuild-std=std,panic_abort
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\aarch64-pc-windows-msvc\release\subsystem-for-arxumbra.exe dist\aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
+          Compress-Archive -Path dist\aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe -DestinationPath dist\aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.zip -CompressionLevel Optimal
+          Remove-Item dist\aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
+          (Get-ChildItem dist\*.zip | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name }) | Out-File -Encoding ascii dist\SHA256SUMS-aarch64.txt
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
           path: dist/*
 
   release:
     name: Release
     needs:
-      - Linux-Subsystem-for-Arxumbra
-      - macOS-Subsystem-for-Arxumbra
-      - Windows-Subsystem-for-Arxumbra
-    runs-on: ubuntu-latest
+      - linux-x86_64
+      - linux-aarch64
+      - macos-aarch64
+      - macos-x86_64
+      - windows-x86_64
+      - windows-aarch64
+    runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/download-artifact@v8.0.1
