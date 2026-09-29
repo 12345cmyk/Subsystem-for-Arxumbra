@@ -14,18 +14,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  linux-x86_64:
-    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-    runs-on: ubuntu-24.04
+  linux-aarch64:
+    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7.0.1
 
       - name: toolchain
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src --quiet
-          rustup default nightly --quiet
-          rustup target add x86_64-unknown-linux-gnu --quiet
+          { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add aarch64-unknown-linux-gnu; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: system libraries
         run: |
@@ -36,7 +34,57 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/llvm
-          key: arx-llvm-llvmorg-23.1.0-rc3-linux
+          key: arx-llvm-llvmorg-23.1.0-rc3-linux-arm64
+
+      - name: prerelease llvm linker
+        run: |
+          mkdir -p "$HOME/llvm/bin"
+          if [ ! -x "$HOME/llvm/bin/ld.lld" ]; then
+            curl -fsSL --retry 3 -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/LLVM-23.1.0-rc3-Linux-ARM64.tar.xz
+            tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 --wildcards '*/bin/ld.lld' '*/bin/lld'
+            rm -f /tmp/llvm.tar.xz
+          fi
+
+      - name: build
+        run: |
+          RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
+            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu -Zbuild-std=std,panic_abort
+
+      - name: package
+        run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-gnu/release/subsystem-for-arxumbra dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          chmod 755 dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          tar cf - -C dist aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6 | xz -9e -T0 -c > dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.xz
+          rm dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          sha256sum dist/*.tar.xz > dist/SHA256SUMS-aarch64.txt
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          path: dist/*
+
+  linux-x86_64:
+    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: toolchain
+        run: |
+          { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add x86_64-unknown-linux-gnu; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
+
+      - name: system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config xz-utils
+
+      - name: cached prerelease llvm
+        uses: actions/cache@v4
+        with:
+          path: ~/llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-linux-x64
 
       - name: prerelease llvm linker
         run: |
@@ -66,58 +114,6 @@ jobs:
           name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
           path: dist/*
 
-  linux-aarch64:
-    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v7.0.1
-
-      - name: toolchain
-        run: |
-          rustup toolchain install nightly --profile minimal -c rust-src --quiet
-          rustup default nightly --quiet
-          rustup target add aarch64-unknown-linux-gnu --quiet
-
-      - name: system libraries
-        run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq gcc-aarch64-linux-gnu libwayland-dev libxkbcommon-dev pkg-config xz-utils
-
-      - name: cached prerelease llvm
-        uses: actions/cache@v4
-        with:
-          path: ~/llvm
-          key: arx-llvm-llvmorg-23.1.0-rc3-linux
-
-      - name: prerelease llvm linker
-        run: |
-          mkdir -p "$HOME/llvm/bin"
-          if [ ! -x "$HOME/llvm/bin/ld.lld" ]; then
-            curl -fsSL --retry 3 -o /tmp/llvm.tar.xz https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/LLVM-23.1.0-rc3-Linux-X64.tar.xz
-            tar -xJf /tmp/llvm.tar.xz -C "$HOME/llvm" --strip-components=1 --wildcards '*/bin/ld.lld' '*/bin/lld'
-            rm -f /tmp/llvm.tar.xz
-          fi
-
-      - name: build
-        run: |
-          PKG_CONFIG_ALLOW_CROSS=1 RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C linker=aarch64-linux-gnu-gcc -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500" \
-            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu -Zbuild-std=std,panic_abort
-
-      - name: package
-        run: |
-          mkdir -p dist
-          cp target/aarch64-unknown-linux-gnu/release/subsystem-for-arxumbra dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-          chmod 755 dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-          tar cf - -C dist aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6 | xz -9e -T0 -c > dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.tar.xz
-          rm dist/aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-          sha256sum dist/*.tar.xz > dist/SHA256SUMS-aarch64.txt
-
-      - uses: actions/upload-artifact@v7.0.1
-        with:
-          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-          path: dist/*
-
   macos-aarch64:
     name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
     runs-on: macos-15
@@ -127,9 +123,7 @@ jobs:
 
       - name: toolchain
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src --quiet
-          rustup default nightly --quiet
-          rustup target add aarch64-apple-darwin --quiet
+          { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add aarch64-apple-darwin; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: cached prerelease llvm
         uses: actions/cache@v4
@@ -174,9 +168,7 @@ jobs:
 
       - name: toolchain
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src --quiet
-          rustup default nightly --quiet
-          rustup target add x86_64-apple-darwin --quiet
+          { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add x86_64-apple-darwin; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: cached prerelease llvm
         uses: actions/cache@v4
@@ -212,61 +204,6 @@ jobs:
           name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
           path: dist/*
 
-  windows-x86_64:
-    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v7.0.1
-
-      - name: toolchain
-        shell: pwsh
-        run: |
-          rustup toolchain install nightly --profile minimal -c rust-src --quiet
-          rustup default nightly --quiet
-          rustup target add x86_64-pc-windows-msvc --quiet
-
-      - name: cached prerelease llvm
-        uses: actions/cache@v4
-        with:
-          path: ~\llvm
-          key: arx-llvm-llvmorg-23.1.0-rc3-windows
-
-      - name: prerelease llvm linker
-        shell: pwsh
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force "$HOME\llvm\bin" | Out-Null
-          if (-not (Test-Path "$HOME\llvm\bin\lld-link.exe")) {
-            Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/clang+llvm-23.0.0.3-x86_64-pc-windows-msvc.tar.xz' -OutFile "$env:TEMP\llvm.tar.xz"
-            tar -xJf "$env:TEMP\llvm.tar.xz" -C "$HOME\llvm" --strip-components=1 '*/bin/lld-link.exe' '*/bin/clang-cl.exe' '*/bin/llvm-lib.exe' '*/lib/clang/*'
-            Remove-Item "$env:TEMP\llvm.tar.xz" -Force
-          }
-          "$HOME\llvm\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-      - name: build
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:RUSTFLAGS = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
-          cargo build --release --locked --quiet --target x86_64-pc-windows-msvc -Zbuild-std=std,panic_abort
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target\x86_64-pc-windows-msvc\release\subsystem-for-arxumbra.exe dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
-          Compress-Archive -Path dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe -DestinationPath dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.zip -CompressionLevel Optimal
-          Remove-Item dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
-          (Get-ChildItem dist\*.zip | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name }) | Out-File -Encoding ascii dist\SHA256SUMS-x86_64.txt
-
-      - uses: actions/upload-artifact@v7.0.1
-        with:
-          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
-          path: dist/*
-
   windows-aarch64:
     name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
     runs-on: windows-latest
@@ -277,9 +214,12 @@ jobs:
       - name: toolchain
         shell: pwsh
         run: |
-          rustup toolchain install nightly --profile minimal -c rust-src --quiet
-          rustup default nightly --quiet
-          rustup target add aarch64-pc-windows-msvc --quiet
+          rustup toolchain install nightly --profile minimal -c rust-src *> "$env:TEMP\rustup.log"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
+          rustup default nightly *>> "$env:TEMP\rustup.log"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
+          rustup target add aarch64-pc-windows-msvc *>> "$env:TEMP\rustup.log"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
 
       - name: cached prerelease llvm
         uses: actions/cache@v4
@@ -315,18 +255,16 @@ jobs:
       - name: cargo-xwin
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           if (-not (Test-Path "$HOME\cargo-xwin\bin\cargo-xwin.exe")) {
             cargo install cargo-xwin --version 0.23.1 --locked --root "$HOME\cargo-xwin" --quiet
+            if ($LASTEXITCODE -ne 0) { exit 1 }
           }
           "$HOME\cargo-xwin\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: build
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           $env:XWIN_CACHE_DIR = "$HOME\xwin"
-          $env:CHROME_HEADLESS = '1'
           $env:RUSTFLAGS = '-C target-cpu=generic -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
           cargo xwin build --release --locked --quiet --target aarch64-pc-windows-msvc -Zbuild-std=std,panic_abort
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -345,15 +283,72 @@ jobs:
           name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
           path: dist/*
 
+  windows-x86_64:
+    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install nightly --profile minimal -c rust-src *> "$env:TEMP\rustup.log"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
+          rustup default nightly *>> "$env:TEMP\rustup.log"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
+          rustup target add x86_64-pc-windows-msvc *>> "$env:TEMP\rustup.log"
+          if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
+
+      - name: cached prerelease llvm
+        uses: actions/cache@v4
+        with:
+          path: ~\llvm
+          key: arx-llvm-llvmorg-23.1.0-rc3-windows
+
+      - name: prerelease llvm linker
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force "$HOME\llvm\bin" | Out-Null
+          if (-not (Test-Path "$HOME\llvm\bin\lld-link.exe")) {
+            Invoke-WebRequest -Uri 'https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.0-rc3/clang+llvm-23.0.0.3-x86_64-pc-windows-msvc.tar.xz' -OutFile "$env:TEMP\llvm.tar.xz"
+            tar -xJf "$env:TEMP\llvm.tar.xz" -C "$HOME\llvm" --strip-components=1 '*/bin/lld-link.exe' '*/bin/clang-cl.exe' '*/bin/llvm-lib.exe' '*/lib/clang/*'
+            Remove-Item "$env:TEMP\llvm.tar.xz" -Force
+          }
+          "$HOME\llvm\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: build
+        shell: pwsh
+        run: |
+          $env:RUSTFLAGS = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+          cargo build --release --locked --quiet --target x86_64-pc-windows-msvc -Zbuild-std=std,panic_abort
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\subsystem-for-arxumbra.exe dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
+          Compress-Archive -Path dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe -DestinationPath dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.zip -CompressionLevel Optimal
+          Remove-Item dist\x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6.exe
+          (Get-ChildItem dist\*.zip | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name }) | Out-File -Encoding ascii dist\SHA256SUMS-x86_64.txt
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s6
+          path: dist/*
+
   release:
     name: Release
     needs:
-      - linux-x86_64
       - linux-aarch64
+      - linux-x86_64
       - macos-aarch64
       - macos-x86_64
-      - windows-x86_64
       - windows-aarch64
+      - windows-x86_64
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
     steps:
