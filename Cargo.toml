@@ -1,17 +1,12 @@
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 
 [[bin]]
 name = "subsystem-for-arxumbra"
 path = "src/main.rs"
 
-# One dependency block instead of six byte-identical per-target copies.
-# `wayland` is the only target-dependent flag and winit gates its wayland backend
-# behind Linux/BSD targets, so the flag is inert on macOS and Windows: the resolved
-# graph for those platforms contains no wayland crate at all (verified with
-# `cargo metadata --filter-platform`).
 [dependencies]
 basisu = "0.1"
 mimalloc = "0.1"
