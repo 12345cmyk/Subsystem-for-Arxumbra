@@ -4,7 +4,6 @@
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-// Constant ladder: every tunable below folds into the instruction stream at compile time.
 const BC7: basisu::TargetFormat = basisu::TargetFormat::Bc7Rgba;
 const RAW: basisu::DecodeFlags = basisu::DecodeFlags::NONE;
 const BLOCK_TEXELS: u32 = 4;
@@ -54,7 +53,6 @@ const fn chain_bytes(source_width: u32, source_height: u32, level: u32, mips: u3
     total
 }
 
-// Deepest mip that still covers the request on both axes; halving ladder, branch-bound like the reference.
 #[inline(always)]
 const fn level_covering(
     source_width: u32,
@@ -73,7 +71,6 @@ const fn level_covering(
     level
 }
 
-// Cursor sprite is square, so the shipped ladder binds on the width axis alone.
 #[inline(always)]
 const fn level_covering_width(source_width: u32, levels: u32, need_width: u32) -> u32 {
     let mut level = 0u32;
@@ -88,7 +85,6 @@ fn smootherstep(position: f32) -> f32 {
     position * position * position * (position * (position * 6.0 - 15.0) + 10.0)
 }
 
-// Transcode one sheet's mip chain straight into its final buffer: one allocation, exact size, no copies.
 fn transcode_chain(
     source: &basisu::Transcoder<'static>,
     level: u32,
@@ -118,7 +114,6 @@ fn transcode_chain(
     pixels
 }
 
-// GPU-resident sheet: BC7 + linear mips + clamped edge sampling, ready for the sprite pipeline as-is.
 fn sheet_image(
     pixels: Vec<u8>,
     source_width: u32,
@@ -153,7 +148,6 @@ fn sheet_image(
     image
 }
 
-// Blending is only paid for when the sheet actually carries coverage.
 #[inline(always)]
 fn cheap_alpha_mode(has_alpha: bool) -> bevy::sprite::SpriteAlphaMode {
     if has_alpha {
@@ -299,7 +293,6 @@ fn main() {
             >,
                   time: bevy::ecs::system::Res<bevy::time::Time>,
                   mut winit: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>| {
-                // Stage 1 - window invariants, every write guarded by an actual divergence.
                 let now = std::time::Instant::now();
                 let delta = time.delta_secs().min(DELTA_CEILING);
                 let booting = phase == 0;
@@ -338,7 +331,6 @@ fn main() {
                 let height = physical_height as f32;
                 let geometry_changed = (physical_width, physical_height) != viewport;
 
-                // Stage 2 - layout solved once per frame, in closed form.
                 let cover = (width / background_size.x).max(height / background_size.y);
                 let panel_width = width * PANEL_WIDTH_SHARE;
                 let panel_open_x = panel_width * 0.5 - width * 0.5;
@@ -349,7 +341,6 @@ fn main() {
                     (height * 0.5 - cursor_extent * 0.5).max(0.0),
                 );
 
-                // Stage 3 - residency ladder: the cheapest mip chain that still covers the target.
                 let background_target_level = level_covering(
                     background_width,
                     background_height,
@@ -396,7 +387,6 @@ fn main() {
                 let cursor_stale =
                     (cursor_target_level, cursor_target_mips) != (cursor_level, cursor_mips);
 
-                // Stage 4 - transcode only what went stale, all sheets in parallel, one output buffer each.
                 if background_stale || menu_stale || cursor_stale {
                     let (background_pixels, menu_pixels, cursor_pixels) =
                         std::thread::scope(|scope| {
@@ -499,7 +489,6 @@ fn main() {
                     }
                 }
 
-                // Stage 5 - one-shot staging: camera, sheets, revealed only once every texture is resident.
                 if booting {
                     let (Some(background_current), Some(panel_current), Some(cursor_current)) = (
                         background_handle.as_ref(),
@@ -568,7 +557,6 @@ fn main() {
                     idle_deadline = Some(now + IDLE_PARK);
                 }
 
-                // Stage 6 - re-projection: only on a real resolution change, and only on the entities it moves.
                 if !booting && geometry_changed {
                     if let Ok((mut transform, mut sprite, _)) = sprites.get_mut(background_entity) {
                         transform.scale = bevy::math::Vec3::splat(cover);
@@ -606,7 +594,6 @@ fn main() {
                     viewport = (physical_width, physical_height);
                 }
 
-                // Stage 7 - keyboard cursor: Ctrl + WASD/arrows, Shift for precision, critically damped on a 45 ms horizon.
                 let mut control = false;
                 let mut direction = bevy::math::Vec2::ZERO;
                 if !booting {
@@ -658,7 +645,6 @@ fn main() {
                     }
                 }
 
-                // Stage 8 - panel: quintic lift, integrated only while it is actually travelling.
                 if !booting {
                     if input.just_pressed(bevy::input::keyboard::KeyCode::F1) {
                         panel_open = !panel_open;
@@ -698,7 +684,6 @@ fn main() {
                     }
                 }
 
-                // Stage 9 - escape contract: seven seconds of held escape exits, no throttling in between.
                 if input.just_pressed(bevy::input::keyboard::KeyCode::Escape) {
                     escape_since = Some(now);
                 }
@@ -712,7 +697,6 @@ fn main() {
                     }
                 }
 
-                // Stage 10 - governor: continuous while anything moves, one-second park tick when nothing does.
                 if panel_motion != 0
                     || control
                     || direction != bevy::math::Vec2::ZERO
