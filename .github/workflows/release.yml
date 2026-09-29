@@ -1,37 +1,10 @@
 name: release
 
-# Brutal release pipeline.
-# Toolchain policy: LLVM/lld is pulled from the newest *prerelease* published on
-# github.com/llvm/llvm-project and used as the real linker for every platform.
-# No distro LLVM, no apt lld, no silent version drift: the resolved tag is part of
-# the cache key, printed in the log and overridable through workflow_dispatch.
-
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      llvm_tag:
-        description: 'Prerelease tag из llvm/llvm-project (пусто = самый свежий prerelease)'
-        required: false
-        default: ''
-      llvm_mode:
-        description: 'prerelease = GitHub prerelease lld, system = линкер дистрибутива'
-        required: true
-        type: choice
-        default: prerelease
-        options:
-          - prerelease
-          - system
-      tune:
-        description: 'portable = как раньше (совместимость), aggressive = x86-64-v3 + большие бюджеты инлайна'
-        required: true
-        type: choice
-        default: portable
-        options:
-          - portable
-          - aggressive
 
 permissions:
   contents: write
@@ -46,16 +19,13 @@ env:
   SUFFIX: -v0.0.0.0.0.0-s5
   BUILD_STD: -Zbuild-std=std,panic_abort
   LLVM_REPO: llvm/llvm-project
-  ARX_LLVM_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.llvm_mode || 'prerelease' }}
-  ARX_LLVM_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.llvm_tag || '' }}
-  ARX_TUNE: ${{ github.event_name == 'workflow_dispatch' && inputs.tune || 'portable' }}
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
   CARGO_NET_RETRY: '10'
 
 jobs:
   Linux-Subsystem-for-Arxumbra:
-    name: ${{ matrix.arch }}-Linux-${{ env.NAME_PREFIX }}${{ env.SUFFIX }}
+    name: ${{ matrix.arch }}-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
@@ -86,31 +56,26 @@ jobs:
 
       - name: Stage 2 - resolve LLVM prerelease tag from GitHub
         id: llvm
-        if: env.ARX_LLVM_MODE == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="$ARX_LLVM_TAG"
-          if [ -z "$TAG" ]; then
-            TAG="$(curl -fsSL --retry 3 \
-              -H 'Accept: application/vnd.github+json' \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
-              | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
-          fi
+          set -euo pipefail
+          TAG="$(curl -fsSL --retry 3 \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
+            | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
           [ -n "$TAG" ] || { echo "::error::ни одного LLVM prerelease не найдено"; exit 1; }
           echo "LLVM prerelease: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Stage 2a - cache LLVM prerelease payload
-        if: env.ARX_LLVM_MODE == 'prerelease'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/arx-llvm
           key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-${{ matrix.llvm_asset }}
 
       - name: Stage 2b - materialize LLVM prerelease linker (GitHub release asset)
-        if: env.ARX_LLVM_MODE == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
           ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
@@ -131,41 +96,32 @@ jobs:
             echo "asset: $ASSET"
             curl -fL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/arx-llvm.tar.xz" \
               "https://github.com/$LLVM_REPO/releases/download/$TAG/$ASSET"
-            ls -l "$RUNNER_TEMP/arx-llvm.tar.xz"
             tar -xJf "$RUNNER_TEMP/arx-llvm.tar.xz" -C "$ARX_LLVM_ROOT" --strip-components=1 \
               --wildcards '*/bin/ld.lld' '*/bin/lld' '*/bin/clang' '*/bin/clang++'
             rm -f "$RUNNER_TEMP/arx-llvm.tar.xz"
           fi
           "$ARX_LLVM_ROOT/bin/ld.lld" --version
 
-      - name: Stage 2c - linker probe (prerelease lld + ICF, откат на системный ld)
-        id: link
+      - name: Stage 2c - linker probe (prerelease lld + ICF)
         env:
           ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
         run: |
           set -euo pipefail
+          [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ] || { echo "::error::prerelease ld.lld не найден"; exit 1; }
           if [ "${{ matrix.arch }}" = "aarch64" ]; then PROBE_CC="aarch64-linux-gnu-gcc"; else PROBE_CC="cc"; fi
-          : > "$RUNNER_TEMP/link.env"
           PROBE_FLAGS='-Wl,-O1 -Wl,--as-needed -Wl,--gc-sections -Wl,-z,norelro -Wl,--build-id=none -Wl,--no-eh-frame-hdr'
-          if [ "$ARX_LLVM_MODE" = "prerelease" ] && [ -x "$ARX_LLVM_ROOT/bin/ld.lld" ]; then
-            printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
-            if $PROBE_CC -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,--icf=all $PROBE_FLAGS \
-                 "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
-              echo "линкер: prerelease lld из GitHub ($($ARX_LLVM_ROOT/bin/ld.lld --version | head -1)) + ICF"
-              echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin -C link-arg=-Wl,--icf=all" >> "$GITHUB_ENV"
-              echo "active=1" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::prerelease lld не залинковал пробу:"
-              cat "$RUNNER_TEMP/arx_probe.err"
-              exit 1
-            fi
+          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
+          if $PROBE_CC -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,--icf=all $PROBE_FLAGS \
+               "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
+            echo "линкер: prerelease lld из GitHub ($("$ARX_LLVM_ROOT/bin/ld.lld" --version | head -1)) + ICF"
+            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin -C link-arg=-Wl,--icf=all" >> "$GITHUB_ENV"
           else
-            echo "линкер: системный ld (режим $ARX_LLVM_MODE), ICF отключён"
-            echo "CARGO_LINK_EXTRA=" >> "$GITHUB_ENV"
-            echo "active=0" >> "$GITHUB_OUTPUT"
+            echo "::error::prerelease lld не залинковал пробу:"
+            cat "$RUNNER_TEMP/arx_probe.err"
+            exit 1
           fi
 
-      - name: Stage 3 - system dependencies (только то, что реально нужно bevy target'у)
+      - name: Stage 3 - system dependencies
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -206,27 +162,18 @@ jobs:
       - name: Stage 4 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 5 - build flags
-        id: flags
+      - name: Stage 5 - build flags (portable)
         run: |
-          if [ "$ARX_TUNE" = "aggressive" ]; then
-            if [ "${{ matrix.arch }}" = "aarch64" ]; then
-              TUNE='-C target-cpu=neoverse-n1'
-            else
-              TUNE='-C target-cpu=x86-64-v3'
-            fi
-            OPT='-C llvm-args=--inline-threshold=3000 -C llvm-args=--unroll-threshold=1500'
+          set -euo pipefail
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            TUNE='-C target-cpu=generic'
           else
-            if [ "${{ matrix.arch }}" = "aarch64" ]; then
-              TUNE='-C target-cpu=generic'
-            else
-              TUNE='-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
-            fi
-            OPT='-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            TUNE='-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
           fi
+          OPT='-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
           LINK='-C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr'
           echo "ARX_FLAGS=$TUNE $LINK $OPT" >> "$GITHUB_ENV"
-          echo "tune=$ARX_TUNE flags=$TUNE $LINK $OPT"
+          echo "flags=$TUNE $LINK $OPT"
 
       - name: Stage 6a - instrumented build (PGO generate, fat LTO, build-std, prerelease lld)
         if: matrix.pgo
@@ -241,7 +188,7 @@ jobs:
           RUSTFLAGS="$ARX_FLAGS $CARGO_LINK_EXTRA" \
             cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
-      - name: Stage 7 - headless profile run (weston + lavapipe, пустой stderr, жив на всём интервале)
+      - name: Stage 7 - headless profile run (weston + lavapipe)
         if: matrix.pgo
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
@@ -258,7 +205,7 @@ jobs:
           set -e
           [ "$CODE" = "124" ] || { echo "::error::бинарник умер раньше дедлайна (exit $CODE)"; cat /tmp/profile.err; exit 1; }
           if grep -v "^LLVM Profile Warning:" /tmp/profile.err | grep -q .; then
-            echo "::error::Профильный прогон написал в stderr:"; cat /tmp/profile.err; exit 1
+            echo "::error::профильный прогон написал в stderr:"; cat /tmp/profile.err; exit 1
           fi
           [ -s pgo-profile/default.profraw ] || { echo "::error::профиль PGO не собран"; exit 1; }
 
@@ -275,7 +222,7 @@ jobs:
           RUSTFLAGS="$ARX_FLAGS $CARGO_LINK_EXTRA -Cprofile-use=$PWD/pgo.profdata" \
             cargo build --release --locked --target ${{ matrix.target }} $BUILD_STD
 
-      - name: Stage 10 - release verification run (shipped binary, пустой stderr, жив на всём интервале)
+      - name: Stage 10 - release verification run (shipped binary, weston + lavapipe)
         if: matrix.verify
         run: |
           export XDG_RUNTIME_DIR=$(mktemp -d)
@@ -291,7 +238,7 @@ jobs:
           set -e
           [ "$CODE" = "124" ] || { echo "::error::релизный бинарник умер раньше дедлайна (exit $CODE)"; cat /tmp/verify.err; exit 1; }
           if [ -s /tmp/verify.err ]; then
-            echo "::error::Верификация написала в stderr:"; cat /tmp/verify.err; exit 1
+            echo "::error::верификация написала в stderr:"; cat /tmp/verify.err; exit 1
           fi
 
       - name: Stage 11 - package
@@ -317,11 +264,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ matrix.arch }}-Linux-${{ env.NAME_PREFIX }}${{ env.SUFFIX }}
+          name: ${{ matrix.arch }}-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
           path: dist/*
 
   macOS-Subsystem-for-Arxumbra:
-    name: ${{ matrix.arch }}-macOS-${{ env.NAME_PREFIX }}${{ env.SUFFIX }}
+    name: ${{ matrix.arch }}-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
     runs-on: macos-15
     timeout-minutes: 240
     strategy:
@@ -344,31 +291,26 @@ jobs:
 
       - name: Stage 2 - resolve LLVM prerelease tag from GitHub
         id: llvm
-        if: env.ARX_LLVM_MODE == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="$ARX_LLVM_TAG"
-          if [ -z "$TAG" ]; then
-            TAG="$(curl -fsSL --retry 3 \
-              -H 'Accept: application/vnd.github+json' \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
-              | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
-          fi
+          set -euo pipefail
+          TAG="$(curl -fsSL --retry 3 \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$LLVM_REPO/releases?per_page=100" \
+            | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin) if r.get("prerelease") and not r.get("draft")]; rs.sort(key=lambda r: r["published_at"], reverse=True); print(rs[0]["tag_name"] if rs else "")')"
           [ -n "$TAG" ] || { echo "::error::ни одного LLVM prerelease не найдено"; exit 1; }
           echo "LLVM prerelease: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Stage 2a - cache LLVM prerelease payload
-        if: env.ARX_LLVM_MODE == 'prerelease'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/arx-llvm
           key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-macOS-ARM64
 
       - name: Stage 2b - materialize LLVM prerelease linker (ld64.lld)
-        if: env.ARX_LLVM_MODE == 'prerelease'
         env:
           GH_TOKEN: ${{ github.token }}
           ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
@@ -394,40 +336,34 @@ jobs:
           fi
           "$ARX_LLVM_ROOT/bin/ld64.lld" --version
 
-      - name: Stage 2c - linker probe (prerelease ld64.lld, откат на системный линкер Apple)
+      - name: Stage 2c - linker probe (prerelease ld64.lld)
         env:
           ARX_LLVM_ROOT: ${{ runner.temp }}/arx-llvm
         run: |
           set -euo pipefail
-          if [ "$ARX_LLVM_MODE" = "prerelease" ] && [ -x "$ARX_LLVM_ROOT/bin/ld64.lld" ]; then
-            printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
-            if cc -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,-dead_strip \
-                 "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
-              echo "линкер: prerelease ld64.lld из GitHub ($($ARX_LLVM_ROOT/bin/ld64.lld --version | head -1))"
-              echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin" >> "$GITHUB_ENV"
-              exit 0
-            fi
-            echo "::warning::prerelease ld64.lld не залинковал пробу, остаюсь на линкере Apple:"
-            cat "$RUNNER_TEMP/arx_probe.err"
-          fi
-          echo "CARGO_LINK_EXTRA=" >> "$GITHUB_ENV"
-
-      - name: Stage 3 - build flags
-        run: |
-          if [ "$ARX_TUNE" = "aggressive" ]; then
-            if [ "${{ matrix.arch }}" = "aarch64" ]; then TUNE='-C target-cpu=apple-m1'; else TUNE='-C target-cpu=haswell'; fi
-            OPT='-C llvm-args=--inline-threshold=3000 -C llvm-args=--unroll-threshold=1500'
+          printf 'int main(void){return 0;}\n' > "$RUNNER_TEMP/arx_probe.c"
+          if [ -x "$ARX_LLVM_ROOT/bin/ld64.lld" ] && cc -fuse-ld=lld -B"$ARX_LLVM_ROOT/bin" -Wl,-dead_strip \
+               "$RUNNER_TEMP/arx_probe.c" -o "$RUNNER_TEMP/arx_probe" 2>"$RUNNER_TEMP/arx_probe.err"; then
+            echo "линкер: prerelease ld64.lld из GitHub ($("$ARX_LLVM_ROOT/bin/ld64.lld" --version | head -1))"
+            echo "CARGO_LINK_EXTRA=-C link-arg=-fuse-ld=lld -C link-arg=-B$ARX_LLVM_ROOT/bin" >> "$GITHUB_ENV"
           else
-            if [ "${{ matrix.arch }}" = "aarch64" ]; then
-              TUNE='-C target-cpu=apple-m1'
-            else
-              TUNE='-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
-            fi
-            OPT='-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            echo "::warning::prerelease ld64.lld не залинковал пробу, остаюсь на линкере Apple:"
+            cat "$RUNNER_TEMP/arx_probe.err" || true
+            echo "CARGO_LINK_EXTRA=" >> "$GITHUB_ENV"
           fi
+
+      - name: Stage 3 - build flags (portable)
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            TUNE='-C target-cpu=apple-m1'
+          else
+            TUNE='-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
+          fi
+          OPT='-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
           LINK='-C link-arg=-Wl,-dead_strip -C link-arg=-Wl,-no_fixup_chains'
           echo "ARX_FLAGS=$TUNE $LINK $OPT" >> "$GITHUB_ENV"
-          echo "tune=$ARX_TUNE flags=$TUNE $LINK $OPT"
+          echo "flags=$TUNE $LINK $OPT"
 
       - name: Stage 4 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
@@ -459,11 +395,11 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ matrix.arch }}-macOS-${{ env.NAME_PREFIX }}${{ env.SUFFIX }}
+          name: ${{ matrix.arch }}-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
           path: dist/*
 
   Windows-Subsystem-for-Arxumbra:
-    name: ${{ matrix.arch }}-Windows-${{ env.NAME_PREFIX }}${{ env.SUFFIX }}
+    name: ${{ matrix.arch }}-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
     runs-on: windows-latest
     timeout-minutes: 360
     strategy:
@@ -473,11 +409,9 @@ jobs:
           - target: aarch64-pc-windows-msvc
             arch: aarch64
             xwin: true
-            llvm_asset: x86_64-pc-windows-msvc
           - target: x86_64-pc-windows-msvc
             arch: x86_64
             xwin: false
-            llvm_asset: ''
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -490,41 +424,35 @@ jobs:
 
       - name: Stage 2 - resolve LLVM prerelease tag from GitHub
         id: llvm
-        if: ${{ env.ARX_LLVM_MODE == 'prerelease' && matrix.xwin }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:ARX_LLVM_TAG
-          if (-not $tag) {
-            $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN" }
-            $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:LLVM_REPO/releases?per_page=100"
-            $prerelease = $releases | Where-Object { $_.prerelease -and -not $_.draft } | Sort-Object published_at -Descending
-            if ($prerelease) { $tag = $prerelease[0].tag_name }
-          }
-          if (-not $tag) { throw 'ни одного LLVM prerelease не найдено' }
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN" }
+          $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:LLVM_REPO/releases?per_page=100"
+          $prerelease = $releases | Where-Object { $_.prerelease -and -not $_.draft } | Sort-Object published_at -Descending
+          if (-not $prerelease) { throw 'ни одного LLVM prerelease не найдено' }
+          $tag = $prerelease[0].tag_name
           Write-Host "LLVM prerelease: $tag"
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Stage 2a - cache LLVM prerelease payload
-        if: ${{ env.ARX_LLVM_MODE == 'prerelease' && matrix.xwin }}
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}\arx-llvm
           key: arx-llvm-${{ runner.os }}-${{ runner.arch }}-${{ steps.llvm.outputs.tag }}-msvc
 
       - name: Stage 2b - materialize LLVM prerelease toolchain (clang-cl + lld-link + builtins)
-        if: ${{ env.ARX_LLVM_MODE == 'prerelease' && matrix.xwin }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $root = "$env:RUNNER_TEMP\arx-llvm"
           $tag = '${{ steps.llvm.outputs.tag }}'
           New-Item -ItemType Directory -Force "$root\bin" | Out-Null
-          if (Test-Path "$root\bin\clang-cl.exe") {
-            Write-Host "LLVM $tag уже распакован (кэш)"
-          } else {
+          if (-not (Test-Path "$root\bin\lld-link.exe")) {
             $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN" }
             $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:LLVM_REPO/releases/tags/$tag"
             $asset = $release.assets | Where-Object { $_.name -like '*x86_64-pc-windows-msvc.tar.xz' } | Select-Object -First 1
@@ -546,40 +474,44 @@ jobs:
           path: ${{ runner.temp }}\xwin-cache
           key: arx-xwin-0.23.1-${{ runner.os }}
 
-      - name: Stage 3 - build flags
+      - name: Stage 3 - build flags (portable)
         shell: pwsh
         run: |
-          if ($env:ARX_TUNE -eq 'aggressive') {
-            if ('${{ matrix.arch }}' -eq 'aarch64') { $tune = '-C target-cpu=generic' } else { $tune = '-C target-cpu=x86-64-v3' }
-            $opt = '-C llvm-args=--inline-threshold=3000 -C llvm-args=--unroll-threshold=1500'
+          if ('${{ matrix.arch }}' -eq 'aarch64') {
+            $tune = '-C target-cpu=generic'
           } else {
-            if ('${{ matrix.arch }}' -eq 'aarch64') { $tune = '-C target-cpu=generic' } else { $tune = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha' }
-            $opt = '-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
+            $tune = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha'
           }
+          $opt = '-C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500'
           $link = '-C link-arg=/OPT:REF -C link-arg=/OPT:ICF'
           "ARX_FLAGS=$tune $link $opt" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "tune=$env:ARX_TUNE flags=$tune $link $opt"
+          Write-Host "flags=$tune $link $opt"
 
       - name: Stage 4 - locked dependency fetch
         run: cargo fetch --locked --target ${{ matrix.target }}
 
-      - name: Stage 5a - build x86_64 (fat LTO, build-std, MSVC link.exe)
+      - name: Stage 5a - build x86_64 (prerelease lld-link, fat LTO, build-std)
         if: ${{ !matrix.xwin }}
         shell: pwsh
         run: |
-          $env:RUSTFLAGS = $env:ARX_FLAGS
-          cargo build --release --locked --target ${{ matrix.target }} $env:BUILD_STD
+          $env:RUSTFLAGS = "$env:ARX_FLAGS -Clinker=lld-link"
+          cargo build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::prerelease lld-link не собрал x86_64, откат на link.exe из MSVC"
+            $env:RUSTFLAGS = $env:ARX_FLAGS
+            cargo build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Stage 5b - build aarch64 (fat LTO, prerelease clang-cl + lld-link через xwin, build-std)
+      - name: Stage 5b - build aarch64 (prerelease clang-cl + lld-link, cargo-xwin, build-std)
         if: matrix.xwin
         shell: pwsh
         env:
           XWIN_CACHE_DIR: ${{ runner.temp }}\xwin-cache
         run: |
           cargo install cargo-xwin --version 0.23.1 --locked
-          $env:RUSTFLAGS = "$env:ARX_FLAGS -C linker=lld-link -Clink-self-contained=no"
-          cargo xwin build --release --locked --target ${{ matrix.target }} $env:BUILD_STD
+          $env:RUSTFLAGS = "$env:ARX_FLAGS -Clinker=lld-link -Clink-self-contained=no"
+          cargo xwin build --release --locked --target ${{ matrix.target }} '-Zbuild-std=std,panic_abort'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Stage 6 - package
@@ -610,7 +542,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: ${{ matrix.arch }}-Windows-${{ env.NAME_PREFIX }}${{ env.SUFFIX }}
+          name: ${{ matrix.arch }}-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s5
           path: dist/*
 
   release:
