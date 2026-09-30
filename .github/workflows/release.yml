@@ -30,9 +30,10 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston xvfb zstd
           command -v zstd > /dev/null
           command -v weston > /dev/null
+          command -v Xvfb > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v5.0.4
@@ -78,66 +79,61 @@ jobs:
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
           printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
-          (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          Xvfb :99 -ac -screen 0 1920x1080x24 -fbdir "$XDG_RUNTIME_DIR" > /tmp/xvfb.log 2>&1 &
+          xvfb_pid=$!
+          for _ in $(seq 1 30); do
+            [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] && break
+            sleep 0.2
+          done
+          [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
+          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
           weston_pid=$!
-          for _ in $(seq 1 50); do
+          for _ in $(seq 1 30); do
             [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
             sleep 0.2
           done
+          if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
+            kill -9 "$weston_pid" 2>/dev/null || true
+            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
+            weston_pid=$!
+            for _ in $(seq 1 30); do
+              [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
+              sleep 0.2
+            done
+          fi
           [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
           icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
           [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
           shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
-          [ -n "$shooter" ] || { echo "::error::weston-screenshooter missing"; exit 1; }
-          WAYLAND_DISPLAY=arx-verify VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
+          env -u DISPLAY WAYLAND_DISPLAY=arx-verify MESA_VK_WSI_PRESENT_MODE=mailbox VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
           app_pid=$!
           rendered=0
-          for _ in $(seq 1 45); do
+          for _ in $(seq 1 25); do
             if ! kill -0 "$app_pid" 2>/dev/null; then
               wait "$app_pid" 2>/dev/null; rc=$?
               echo "::error::app exited early with status $rc"
               tail -n 15 /tmp/arx.out /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done
               exit 1
             fi
-            rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
-            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify "$shooter" >/dev/null 2>&1); then
-              if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
-          while pos<len(data):
-           l,t=struct.unpack('>I4s',data[pos:pos+8]); b=data[pos+8:pos+8+l]; pos+=12+l
-           if t==b'IHDR': w,h,_,ctype,_,_,_=struct.unpack('>IIBBBBB',b)
-           elif t==b'IDAT': idat.extend(b)
-           elif t==b'IEND': break
-          bpp=4 if ctype==6 else 3; raw=zlib.decompress(bytes(idat)); s=w*bpp; prev=bytearray(s); nb=tot=off=0; cols=set()
-          for y in range(h):
-           f=raw[off]; row=bytearray(raw[off+1:off+1+s]); off+=1+s
-           for i in range(s):
-            a=row[i-bpp] if i>=bpp else 0; b=prev[i]; c=prev[i-bpp] if i>=bpp else 0
-            if f==1 and i>=bpp: row[i]=(row[i]+a)&255
-            elif f==2: row[i]=(row[i]+b)&255
-            elif f==3: row[i]=(row[i]+((a+b)>>1))&255
-            elif f==4:
-             p=a+b-c; pa,pb,pc=abs(p-a),abs(p-b),abs(p-c); pr=a if (pa<=pb and pa<=pc) else (b if pb<=pc else c); row[i]=(row[i]+pr)&255
-           prev=row
-           if (y&3)==0:
-            for x in range(0,s,bpp*4):
-             r,g,bl=row[x],row[x+1],row[x+2]; tot+=1
-             if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
+            if python3 -c "import os,struct,sys; p=os.path.join(os.environ['XDG_RUNTIME_DIR'],'Xvfb_screen0'); data=open(p,'rb').read() if os.path.exists(p) else b''; sys.exit(2) if len(data)<8294500 else None; hdr=struct.unpack('>25I',data[:100]); w,h,bo=hdr[4],hdr[5],hdr[7]; buf=memoryview(data)[len(data)-w*h*4:]; fmt='<I' if bo==0 else '>I'; nb=tot=0; cols=set()
+          for y in range(0,h,4):
+           ro=y*w*4
+           for x in range(0,w*4,16):
+            v=struct.unpack_from(fmt,buf,ro+x)[0]; r,g,bl=(v>>16)&255,(v>>8)&255,v&255; tot+=1
+            if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
           rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)"; then
-                cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
-                echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo "::notice title=weston::$(cat /tmp/weston.metric)"
-                rendered=1
-                break
-              fi
+              cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice title=weston::$(cat /tmp/weston.metric)"
+              rendered=1
+              break
             fi
             sleep 1
           done
-          kill -INT "$app_pid" 2>/dev/null || true
-          wait "$app_pid" 2>/dev/null || true
-          kill -TERM "$weston_pid" 2>/dev/null || true
-          wait "$weston_pid" 2>/dev/null || true
+          kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
+          wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
           [ ! -s /tmp/arx.err ] || { tail -n 15 /tmp/arx.err | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
-          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log /tmp/xvfb.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
       - name: package
         run: |
@@ -175,9 +171,10 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston xvfb zstd
           command -v zstd > /dev/null
           command -v weston > /dev/null
+          command -v Xvfb > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v5.0.4
@@ -223,66 +220,61 @@ jobs:
           mkdir -p "$XDG_RUNTIME_DIR"
           chmod 700 "$XDG_RUNTIME_DIR"
           printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
-          (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          Xvfb :99 -ac -screen 0 1920x1080x24 -fbdir "$XDG_RUNTIME_DIR" > /tmp/xvfb.log 2>&1 &
+          xvfb_pid=$!
+          for _ in $(seq 1 30); do
+            [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] && break
+            sleep 0.2
+          done
+          [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
+          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
           weston_pid=$!
-          for _ in $(seq 1 50); do
+          for _ in $(seq 1 30); do
             [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
             sleep 0.2
           done
+          if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
+            kill -9 "$weston_pid" 2>/dev/null || true
+            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
+            weston_pid=$!
+            for _ in $(seq 1 30); do
+              [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
+              sleep 0.2
+            done
+          fi
           [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
           icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
           [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
           shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
-          [ -n "$shooter" ] || { echo "::error::weston-screenshooter missing"; exit 1; }
-          WAYLAND_DISPLAY=arx-verify VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
+          env -u DISPLAY WAYLAND_DISPLAY=arx-verify MESA_VK_WSI_PRESENT_MODE=mailbox VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
           app_pid=$!
           rendered=0
-          for _ in $(seq 1 45); do
+          for _ in $(seq 1 25); do
             if ! kill -0 "$app_pid" 2>/dev/null; then
               wait "$app_pid" 2>/dev/null; rc=$?
               echo "::error::app exited early with status $rc"
               tail -n 15 /tmp/arx.out /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done
               exit 1
             fi
-            rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
-            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify "$shooter" >/dev/null 2>&1); then
-              if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
-          while pos<len(data):
-           l,t=struct.unpack('>I4s',data[pos:pos+8]); b=data[pos+8:pos+8+l]; pos+=12+l
-           if t==b'IHDR': w,h,_,ctype,_,_,_=struct.unpack('>IIBBBBB',b)
-           elif t==b'IDAT': idat.extend(b)
-           elif t==b'IEND': break
-          bpp=4 if ctype==6 else 3; raw=zlib.decompress(bytes(idat)); s=w*bpp; prev=bytearray(s); nb=tot=off=0; cols=set()
-          for y in range(h):
-           f=raw[off]; row=bytearray(raw[off+1:off+1+s]); off+=1+s
-           for i in range(s):
-            a=row[i-bpp] if i>=bpp else 0; b=prev[i]; c=prev[i-bpp] if i>=bpp else 0
-            if f==1 and i>=bpp: row[i]=(row[i]+a)&255
-            elif f==2: row[i]=(row[i]+b)&255
-            elif f==3: row[i]=(row[i]+((a+b)>>1))&255
-            elif f==4:
-             p=a+b-c; pa,pb,pc=abs(p-a),abs(p-b),abs(p-c); pr=a if (pa<=pb and pa<=pc) else (b if pb<=pc else c); row[i]=(row[i]+pr)&255
-           prev=row
-           if (y&3)==0:
-            for x in range(0,s,bpp*4):
-             r,g,bl=row[x],row[x+1],row[x+2]; tot+=1
-             if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
+            if python3 -c "import os,struct,sys; p=os.path.join(os.environ['XDG_RUNTIME_DIR'],'Xvfb_screen0'); data=open(p,'rb').read() if os.path.exists(p) else b''; sys.exit(2) if len(data)<8294500 else None; hdr=struct.unpack('>25I',data[:100]); w,h,bo=hdr[4],hdr[5],hdr[7]; buf=memoryview(data)[len(data)-w*h*4:]; fmt='<I' if bo==0 else '>I'; nb=tot=0; cols=set()
+          for y in range(0,h,4):
+           ro=y*w*4
+           for x in range(0,w*4,16):
+            v=struct.unpack_from(fmt,buf,ro+x)[0]; r,g,bl=(v>>16)&255,(v>>8)&255,v&255; tot+=1
+            if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
           rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)"; then
-                cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
-                echo "" >> "$GITHUB_STEP_SUMMARY"
-                echo "::notice title=weston::$(cat /tmp/weston.metric)"
-                rendered=1
-                break
-              fi
+              cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "::notice title=weston::$(cat /tmp/weston.metric)"
+              rendered=1
+              break
             fi
             sleep 1
           done
-          kill -INT "$app_pid" 2>/dev/null || true
-          wait "$app_pid" 2>/dev/null || true
-          kill -TERM "$weston_pid" 2>/dev/null || true
-          wait "$weston_pid" 2>/dev/null || true
+          kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
+          wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
           [ ! -s /tmp/arx.err ] || { tail -n 15 /tmp/arx.err | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
-          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log /tmp/xvfb.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
       - name: package
         run: |

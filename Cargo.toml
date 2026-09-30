@@ -2,7 +2,7 @@ cargo-features = ["panic-immediate-abort"]
 
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.9"
+version = "0.0.7"
 edition = "2024"
 
 [dependencies]
