@@ -86,7 +86,7 @@ jobs:
             sleep 0.2
           done
           [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 WAYLAND_DEBUG=server weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
           weston_pid=$!
           for _ in $(seq 1 30); do
             [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -94,7 +94,7 @@ jobs:
           done
           if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
             kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
+            (cd "$XDG_RUNTIME_DIR" && WAYLAND_DEBUG=server weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
             weston_pid=$!
             for _ in $(seq 1 30); do
               [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -132,10 +132,11 @@ jobs:
             fi
             sleep 1
           done
+          if [ "$rendered" -ne 1 ]; then proc_diag="$(grep -E 'State|Threads|VmRSS|voluntary' /proc/$app_pid/status 2>/dev/null | tr '\n' ' ' || true) wchan=$(head -n 1 /proc/$app_pid/task/*/wchan 2>/dev/null | tr '\n' ' ' || true)"; fi
           kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
           wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
           [ ! -s /tmp/arx.err ] || { echo "::error::arx_err: $(tail -n 20 /tmp/arx.err 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
-          [ "$rendered" -eq 1 ] || { echo "::error::metric: $(tr '\n' '|' < /tmp/weston.metric 2>/dev/null || true)"; echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"; echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"; echo "::error::xvfb_log: $(tail -n 15 /tmp/xvfb.log 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
+          [ "$rendered" -eq 1 ] || { echo "::error::metric: $(tr '\n' '|' < /tmp/weston.metric 2>/dev/null || true) proc: $proc_diag"; echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"; echo "::error::wl_proto: $(grep -E 'xdg_|wl_surface|wl_shm|error' /tmp/weston.log 2>/dev/null | tail -n 30 | tr '\n' '|' || true)"; echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
 
       - name: package
         run: |
@@ -229,7 +230,7 @@ jobs:
             sleep 0.2
           done
           [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 WAYLAND_DEBUG=server weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
           weston_pid=$!
           for _ in $(seq 1 30); do
             [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -237,7 +238,7 @@ jobs:
           done
           if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
             kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
+            (cd "$XDG_RUNTIME_DIR" && WAYLAND_DEBUG=server weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
             weston_pid=$!
             for _ in $(seq 1 30); do
               [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -275,10 +276,11 @@ jobs:
             fi
             sleep 1
           done
+          if [ "$rendered" -ne 1 ]; then proc_diag="$(grep -E 'State|Threads|VmRSS|voluntary' /proc/$app_pid/status 2>/dev/null | tr '\n' ' ' || true) wchan=$(head -n 1 /proc/$app_pid/task/*/wchan 2>/dev/null | tr '\n' ' ' || true)"; fi
           kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
           wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
           [ ! -s /tmp/arx.err ] || { echo "::error::arx_err: $(tail -n 20 /tmp/arx.err 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
-          [ "$rendered" -eq 1 ] || { echo "::error::metric: $(tr '\n' '|' < /tmp/weston.metric 2>/dev/null || true)"; echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"; echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"; echo "::error::xvfb_log: $(tail -n 15 /tmp/xvfb.log 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
+          [ "$rendered" -eq 1 ] || { echo "::error::metric: $(tr '\n' '|' < /tmp/weston.metric 2>/dev/null || true) proc: $proc_diag"; echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"; echo "::error::wl_proto: $(grep -E 'xdg_|wl_surface|wl_shm|error' /tmp/weston.log 2>/dev/null | tail -n 30 | tr '\n' '|' || true)"; echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
 
       - name: package
         run: |
