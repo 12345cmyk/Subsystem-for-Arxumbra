@@ -194,8 +194,8 @@ fn main() {
     let mut cursor_velocity = bevy::math::Vec2::ZERO;
     let mut escape_since: Option<std::time::Instant> = None;
     let mut idle_deadline: Option<std::time::Instant> = None;
-    bevy::app::App::new()
-        .insert_resource(bevy::camera::ClearColor(bevy::color::Color::BLACK))
+    let mut app = bevy::app::App::new();
+    app.insert_resource(bevy::camera::ClearColor(bevy::color::Color::BLACK))
         .add_plugins((
             (
                 bevy::app::TaskPoolPlugin::default(),
@@ -577,5 +577,180 @@ fn main() {
                 }
             },
         )
-        .run();
+        .add_systems(
+            bevy::app::Update,
+            |mut mframe: bevy::ecs::system::Local<u32>,
+             windows: bevy::ecs::system::Query<
+                 &bevy::window::Window,
+                 bevy::ecs::query::With<bevy::window::PrimaryWindow>,
+             >,
+             cameras: bevy::ecs::system::Query<(
+                 &bevy::camera::Camera,
+                 &bevy::camera::visibility::VisibleEntities,
+             )>,
+             sprites: bevy::ecs::system::Query<
+                 (
+                     Option<&bevy::mesh::Mesh2d>,
+                     Option<
+                         &bevy::sprite_render::MeshMaterial2d<
+                             bevy::sprite_render::SpriteMeshMaterial,
+                         >,
+                     >,
+                     Option<&bevy::camera::visibility::ViewVisibility>,
+                     Option<&bevy::camera::visibility::InheritedVisibility>,
+                 ),
+                 bevy::ecs::query::With<bevy::sprite::Sprite>,
+             >,
+             images: bevy::ecs::system::Res<bevy::asset::Assets<bevy::image::Image>>,
+             meshes: bevy::ecs::system::Res<bevy::asset::Assets<bevy::mesh::Mesh>>,
+             materials: bevy::ecs::system::Res<
+                 bevy::asset::Assets<bevy::sprite_render::SpriteMeshMaterial>,
+             >| {
+                *mframe += 1;
+                if *mframe == 5 || *mframe == 20 {
+                    let (ww, wh) = windows
+                        .single()
+                        .map(|w| (w.physical_width(), w.physical_height()))
+                        .unwrap_or((0, 0));
+                    let mut cam_count = 0usize;
+                    let mut cam_tw = 0u32;
+                    let mut cam_th = 0u32;
+                    let mut vis_m2d = 0usize;
+                    for (cam, vis) in cameras.iter() {
+                        cam_count += 1;
+                        if let Some(sz) = cam.physical_target_size() {
+                            cam_tw = sz.x;
+                            cam_th = sz.y;
+                        }
+                        vis_m2d = vis.get::<bevy::mesh::Mesh2d>().len();
+                    }
+                    let mut sp_total = 0usize;
+                    let mut sp_mesh = 0usize;
+                    let mut sp_mat = 0usize;
+                    let mut sp_vvis = 0usize;
+                    let mut sp_ivis = 0usize;
+                    for (m2d, mat2d, vvis, ivis) in sprites.iter() {
+                        sp_total += 1;
+                        if m2d.is_some() {
+                            sp_mesh += 1;
+                        }
+                        if mat2d.is_some() {
+                            sp_mat += 1;
+                        }
+                        if vvis.is_some_and(|v| v.get()) {
+                            sp_vvis += 1;
+                        }
+                        if ivis.is_some_and(|v| v.get()) {
+                            sp_ivis += 1;
+                        }
+                    }
+                    println!(
+                        "MAIN_DIAG f={} win={}x{} cam={} target={}x{} vis_m2d={} sp={}/{}/{}/{}/{} assets={}/{}/{}",
+                        *mframe,
+                        ww,
+                        wh,
+                        cam_count,
+                        cam_tw,
+                        cam_th,
+                        vis_m2d,
+                        sp_total,
+                        sp_mesh,
+                        sp_mat,
+                        sp_vvis,
+                        sp_ivis,
+                        images.len(),
+                        meshes.len(),
+                        materials.len()
+                    );
+                }
+            },
+        );
+    if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render_app.add_systems(
+            bevy::render::Render,
+            |mut rframe: bevy::ecs::system::Local<u32>,
+             pipeline_cache: bevy::ecs::system::Res<bevy::render::render_resource::PipelineCache>,
+             gpu_images: bevy::ecs::system::Res<
+                 bevy::render::render_asset::RenderAssets<bevy::render::texture::GpuImage>,
+             >,
+             render_meshes: bevy::ecs::system::Res<
+                 bevy::render::render_asset::RenderAssets<bevy::render::mesh::RenderMesh>,
+             >,
+             views: bevy::ecs::system::Query<(
+                 &bevy::render::view::ExtractedView,
+                 Option<&bevy::render::view::ViewTarget>,
+                 Option<&bevy::render::view::ViewDepthStencilTexture>,
+             )>,
+             opaque_phases: bevy::ecs::system::Res<
+                 bevy::render::render_phase::ViewBinnedRenderPhases<
+                     bevy::core_pipeline::core_2d::Opaque2d,
+                 >,
+             >,
+             transparent_phases: bevy::ecs::system::Res<
+                 bevy::render::render_phase::ViewSortedRenderPhases<
+                     bevy::core_pipeline::core_2d::Transparent2d,
+                 >,
+             >| {
+                *rframe += 1;
+                if *rframe == 5 || *rframe == 20 {
+                    let mut p_ok = 0usize;
+                    let mut p_q = 0usize;
+                    let mut p_c = 0usize;
+                    let mut p_e = 0usize;
+                    for p in pipeline_cache.pipelines() {
+                        match &p.state {
+                            bevy::render::render_resource::CachedPipelineState::Ok(_) => p_ok += 1,
+                            bevy::render::render_resource::CachedPipelineState::Queued => p_q += 1,
+                            bevy::render::render_resource::CachedPipelineState::Creating(_) => {
+                                p_c += 1
+                            }
+                            bevy::render::render_resource::CachedPipelineState::Err(err) => {
+                                p_e += 1;
+                                println!("PIPE_ERR={}", err);
+                            }
+                        }
+                    }
+                    let mut v_count = 0usize;
+                    let mut v_tgt = 0usize;
+                    let mut v_dep = 0usize;
+                    let mut op_nonempty = 0usize;
+                    let mut tr_items = 0usize;
+                    for (view, tgt, dep) in views.iter() {
+                        v_count += 1;
+                        if tgt.is_some() {
+                            v_tgt += 1;
+                        }
+                        if dep.is_some() {
+                            v_dep += 1;
+                        }
+                        if opaque_phases
+                            .get(&view.retained_view_entity)
+                            .is_some_and(|p| !p.is_empty())
+                        {
+                            op_nonempty += 1;
+                        }
+                        if let Some(tp) = transparent_phases.get(&view.retained_view_entity) {
+                            tr_items += tp.items.len();
+                        }
+                    }
+                    println!(
+                        "RENDER_DIAG f={} views={}/{}/{} op={} tr={} gpu_img={} r_mesh={} pipe={}/{}/{}/{}",
+                        *rframe,
+                        v_count,
+                        v_tgt,
+                        v_dep,
+                        op_nonempty,
+                        tr_items,
+                        gpu_images.iter().count(),
+                        render_meshes.iter().count(),
+                        p_ok,
+                        p_q,
+                        p_c,
+                        p_e
+                    );
+                }
+            },
+        );
+    }
+    app.run();
 }
