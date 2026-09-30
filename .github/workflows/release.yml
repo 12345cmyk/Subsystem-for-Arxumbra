@@ -68,7 +68,7 @@ jobs:
           CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'false'
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
-          RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
+          RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none" \
             cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { grep -E '^error| --> ' /tmp/build.log | head -n 10 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
           "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
 
@@ -86,7 +86,7 @@ jobs:
             sleep 0.2
           done
           [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 WAYLAND_DEBUG=server weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
           weston_pid=$!
           for _ in $(seq 1 30); do
             [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -94,7 +94,7 @@ jobs:
           done
           if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
             kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && WAYLAND_DEBUG=server weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
+            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
             weston_pid=$!
             for _ in $(seq 1 30); do
               [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -212,7 +212,7 @@ jobs:
           CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'false'
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
-          RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-X64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
+          RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-X64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none" \
             cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { grep -E '^error| --> ' /tmp/build.log | head -n 10 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
           "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
 
@@ -230,7 +230,7 @@ jobs:
             sleep 0.2
           done
           [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 WAYLAND_DEBUG=server weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
           weston_pid=$!
           for _ in $(seq 1 30); do
             [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -238,7 +238,7 @@ jobs:
           done
           if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
             kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && WAYLAND_DEBUG=server weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
+            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
             weston_pid=$!
             for _ in $(seq 1 30); do
               [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
@@ -347,7 +347,7 @@ jobs:
           CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'false'
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
-          RUSTFLAGS="-C target-cpu=apple-m1 -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
+          RUSTFLAGS="-C target-cpu=apple-m1 -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none" \
             cargo build --release --locked --quiet --target aarch64-apple-darwin '-Zbuild-std=std,panic_abort'
 
       - name: package
@@ -415,7 +415,7 @@ jobs:
           CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'false'
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
-          RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
+          RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-macOS-ARM64/bin -C link-arg=-Wl,-dead_strip -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none" \
             cargo build --release --locked --quiet --target x86_64-apple-darwin '-Zbuild-std=std,panic_abort'
 
       - name: package
@@ -518,7 +518,7 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
           $env:XWIN_CACHE_DIR = "$HOME\xwin"
-          $env:RUSTFLAGS = '-C target-cpu=generic -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none'
+          $env:RUSTFLAGS = '-C target-cpu=generic -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none'
           cargo xwin build --release --locked --quiet --target aarch64-pc-windows-msvc '-Zbuild-std=std,panic_abort'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -602,7 +602,7 @@ jobs:
           CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'false'
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
-          $env:RUSTFLAGS = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none'
+          $env:RUSTFLAGS = '-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -Clinker=lld-link -C link-arg=/OPT:REF -C link-arg=/OPT:ICF -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none'
           cargo build --release --locked --quiet --target x86_64-pc-windows-msvc '-Zbuild-std=std,panic_abort'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
