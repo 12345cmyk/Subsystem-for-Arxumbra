@@ -2,6 +2,8 @@ name: release
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -28,8 +30,9 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston zstd
           command -v zstd > /dev/null
+          command -v weston > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v5.0.4
@@ -68,6 +71,64 @@ jobs:
             cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
           "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
 
+      - name: weston verification
+        run: |
+          cargo run --manifest-path verification/Cargo.toml --release --quiet >> "$GITHUB_STEP_SUMMARY"
+          export XDG_RUNTIME_DIR=/tmp/weston-runtime
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
+          (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          weston_pid=$!
+          for _ in $(seq 1 50); do
+            [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
+            sleep 0.2
+          done
+          [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
+          WAYLAND_DISPLAY=arx-verify VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
+          app_pid=$!
+          rendered=0
+          for _ in $(seq 1 45); do
+            kill -0 "$app_pid" 2>/dev/null || { cat /tmp/arx.err; cat /tmp/weston.log; exit 1; }
+            rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
+            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify weston-screenshooter >/dev/null 2>&1); then
+              if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
+          while pos<len(data):
+           l,t=struct.unpack('>I4s',data[pos:pos+8]); b=data[pos+8:pos+8+l]; pos+=12+l
+           if t==b'IHDR': w,h,_,ctype,_,_,_=struct.unpack('>IIBBBBB',b)
+           elif t==b'IDAT': idat.extend(b)
+           elif t==b'IEND': break
+          bpp=4 if ctype==6 else 3; raw=zlib.decompress(bytes(idat)); s=w*bpp; prev=bytearray(s); nb=tot=off=0; cols=set()
+          for y in range(h):
+           f=raw[off]; row=bytearray(raw[off+1:off+1+s]); off+=1+s
+           for i in range(s):
+            a=row[i-bpp] if i>=bpp else 0; b=prev[i]; c=prev[i-bpp] if i>=bpp else 0
+            if f==1 and i>=bpp: row[i]=(row[i]+a)&255
+            elif f==2: row[i]=(row[i]+b)&255
+            elif f==3: row[i]=(row[i]+((a+b)>>1))&255
+            elif f==4:
+             p=a+b-c; pa,pb,pc=abs(p-a),abs(p-b),abs(p-c); pr=a if (pa<=pb and pa<=pc) else (b if pb<=pc else c); row[i]=(row[i]+pr)&255
+           prev=row
+           if (y&3)==0:
+            for x in range(0,s,bpp*4):
+             r,g,bl=row[x],row[x+1],row[x+2]; tot+=1
+             if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
+          rat=nb/max(tot,1); print(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)" >> "$GITHUB_STEP_SUMMARY"; then
+                rendered=1
+                break
+              fi
+            fi
+            sleep 1
+          done
+          kill -INT "$app_pid" 2>/dev/null || true
+          wait "$app_pid" 2>/dev/null || true
+          kill -TERM "$weston_pid" 2>/dev/null || true
+          wait "$weston_pid" 2>/dev/null || true
+          [ ! -s /tmp/arx.err ] || { cat /tmp/arx.err; exit 1; }
+          [ "$rendered" -eq 1 ] || { cat /tmp/weston.log; exit 1; }
+
       - name: package
         run: |
           mkdir -p dist && cd dist
@@ -104,8 +165,9 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston zstd
           command -v zstd > /dev/null
+          command -v weston > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v5.0.4
@@ -143,6 +205,64 @@ jobs:
           RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-X64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
             cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
           "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
+
+      - name: weston verification
+        run: |
+          cargo run --manifest-path verification/Cargo.toml --release --quiet >> "$GITHUB_STEP_SUMMARY"
+          export XDG_RUNTIME_DIR=/tmp/weston-runtime
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
+          (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
+          weston_pid=$!
+          for _ in $(seq 1 50); do
+            [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
+            sleep 0.2
+          done
+          [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
+          WAYLAND_DISPLAY=arx-verify VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
+          app_pid=$!
+          rendered=0
+          for _ in $(seq 1 45); do
+            kill -0 "$app_pid" 2>/dev/null || { cat /tmp/arx.err; cat /tmp/weston.log; exit 1; }
+            rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
+            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify weston-screenshooter >/dev/null 2>&1); then
+              if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
+          while pos<len(data):
+           l,t=struct.unpack('>I4s',data[pos:pos+8]); b=data[pos+8:pos+8+l]; pos+=12+l
+           if t==b'IHDR': w,h,_,ctype,_,_,_=struct.unpack('>IIBBBBB',b)
+           elif t==b'IDAT': idat.extend(b)
+           elif t==b'IEND': break
+          bpp=4 if ctype==6 else 3; raw=zlib.decompress(bytes(idat)); s=w*bpp; prev=bytearray(s); nb=tot=off=0; cols=set()
+          for y in range(h):
+           f=raw[off]; row=bytearray(raw[off+1:off+1+s]); off+=1+s
+           for i in range(s):
+            a=row[i-bpp] if i>=bpp else 0; b=prev[i]; c=prev[i-bpp] if i>=bpp else 0
+            if f==1 and i>=bpp: row[i]=(row[i]+a)&255
+            elif f==2: row[i]=(row[i]+b)&255
+            elif f==3: row[i]=(row[i]+((a+b)>>1))&255
+            elif f==4:
+             p=a+b-c; pa,pb,pc=abs(p-a),abs(p-b),abs(p-c); pr=a if (pa<=pb and pa<=pc) else (b if pb<=pc else c); row[i]=(row[i]+pr)&255
+           prev=row
+           if (y&3)==0:
+            for x in range(0,s,bpp*4):
+             r,g,bl=row[x],row[x+1],row[x+2]; tot+=1
+             if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
+          rat=nb/max(tot,1); print(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)" >> "$GITHUB_STEP_SUMMARY"; then
+                rendered=1
+                break
+              fi
+            fi
+            sleep 1
+          done
+          kill -INT "$app_pid" 2>/dev/null || true
+          wait "$app_pid" 2>/dev/null || true
+          kill -TERM "$weston_pid" 2>/dev/null || true
+          wait "$weston_pid" 2>/dev/null || true
+          [ ! -s /tmp/arx.err ] || { cat /tmp/arx.err; exit 1; }
+          [ "$rendered" -eq 1 ] || { cat /tmp/weston.log; exit 1; }
 
       - name: package
         run: |
