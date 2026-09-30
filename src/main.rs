@@ -220,7 +220,7 @@ fn main() {
             bevy::camera::CameraPlugin,
             bevy::light::LightPlugin,
             bevy::render::RenderPlugin {
-                render_creation: bevy::render::settings::RenderCreation::Automatic(
+                render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
                     bevy::render::settings::WgpuSettings {
                         backends: Some(bevy::render::settings::Backends::PRIMARY),
                         power_preference:
@@ -231,7 +231,7 @@ fn main() {
                         ),
                         ..Default::default()
                     },
-                ),
+                )),
                 synchronous_pipeline_compilation: true,
                 ..Default::default()
             },
