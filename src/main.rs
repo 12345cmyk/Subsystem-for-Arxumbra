@@ -173,6 +173,8 @@ fn main() {
     let fullscreen =
         bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
     let grab = bevy::window::CursorGrabMode::Confined;
+    let active_power =
+        bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::ZERO);
     let low_power =
         bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs(1));
     let smootherstep: fn(f32) -> f32 = |t| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
@@ -256,8 +258,8 @@ fn main() {
             ),
         ))
         .insert_resource(bevy::winit::WinitSettings {
-            focused_mode: bevy::winit::UpdateMode::Continuous,
-            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+            focused_mode: active_power,
+            unfocused_mode: active_power,
         })
         .add_systems(
             bevy::app::Update,
@@ -408,20 +410,14 @@ fn main() {
                             bevy::camera::visibility::NoFrustumCulling,
                         ))
                         .id();
-                    if !window.visible {
-                        window.visible = true;
-                    }
                     viewport = (physical_width, physical_height);
                     warmup_frames = 180;
                     let ready_now = std::time::Instant::now();
-                    winit.focused_mode = bevy::winit::UpdateMode::Continuous;
-                    winit.unfocused_mode = bevy::winit::UpdateMode::Continuous;
+                    winit.focused_mode = active_power;
+                    winit.unfocused_mode = active_power;
                     idle_deadline = Some(ready_now + std::time::Duration::from_millis(2500));
                     phase = 1;
                     return;
-                }
-                if !window.visible {
-                    window.visible = true;
                 }
                 if geometry_changed {
                     let cover =
@@ -454,15 +450,17 @@ fn main() {
                     viewport = (physical_width, physical_height);
                     warmup_frames = 180;
                     let resize_now = std::time::Instant::now();
-                    winit.focused_mode = bevy::winit::UpdateMode::Continuous;
-                    winit.unfocused_mode = bevy::winit::UpdateMode::Continuous;
+                    winit.focused_mode = active_power;
+                    winit.unfocused_mode = active_power;
                     idle_deadline = Some(resize_now + std::time::Duration::from_millis(2500));
                     phase = 1;
                 }
                 if warmup_frames > 0 {
                     warmup_frames -= 1;
-                    if warmup_frames == 179
-                        || warmup_frames == 176
+                    if warmup_frames <= 176 && !window.visible {
+                        window.visible = true;
+                    }
+                    if warmup_frames >= 172
                         || warmup_frames == 168
                         || warmup_frames == 152
                         || warmup_frames == 120
@@ -475,6 +473,8 @@ fn main() {
                             }
                         }
                     }
+                } else if !window.visible {
+                    window.visible = true;
                 }
                 let now = std::time::Instant::now();
                 let control = input.pressed(bevy::input::keyboard::KeyCode::ControlLeft)
@@ -573,8 +573,8 @@ fn main() {
                 {
                     idle_deadline = Some(now + std::time::Duration::from_millis(1200));
                     if phase != 1 {
-                        winit.focused_mode = bevy::winit::UpdateMode::Continuous;
-                        winit.unfocused_mode = bevy::winit::UpdateMode::Continuous;
+                        winit.focused_mode = active_power;
+                        winit.unfocused_mode = active_power;
                         phase = 1;
                     }
                 } else if phase == 1 {
