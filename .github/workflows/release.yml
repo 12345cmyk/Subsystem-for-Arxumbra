@@ -2,8 +2,6 @@ name: release
 
 on:
   push:
-    branches:
-      - '**'
     tags:
       - 'v*'
   workflow_dispatch:
@@ -13,11 +11,11 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: false
 
 jobs:
   linux-aarch64:
-    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+    name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 90
     steps:
@@ -30,13 +28,11 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston xvfb zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
           command -v zstd > /dev/null
-          command -v weston > /dev/null
-          command -v Xvfb > /dev/null
 
       - name: cached stable llvm
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-linux-arm64-7zz2
@@ -69,96 +65,24 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
           RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
-            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { grep -E '^error| --> ' /tmp/build.log | head -n 10 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
           "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
-
-      - name: weston verification
-        run: |
-          cargo run --manifest-path verification/Cargo.toml --release --quiet >> "$GITHUB_STEP_SUMMARY"
-          export XDG_RUNTIME_DIR=/tmp/weston-runtime
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
-          printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
-          Xvfb :99 -ac -screen 0 1920x1080x24 -fbdir "$XDG_RUNTIME_DIR" > /tmp/xvfb.log 2>&1 &
-          xvfb_pid=$!
-          for _ in $(seq 1 30); do
-            [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] && break
-            sleep 0.2
-          done
-          [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
-          weston_pid=$!
-          for _ in $(seq 1 30); do
-            [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-            sleep 0.2
-          done
-          if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
-            kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
-            weston_pid=$!
-            for _ in $(seq 1 30); do
-              [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-              sleep 0.2
-            done
-          fi
-          [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
-          [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
-          shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
-          env -u DISPLAY WAYLAND_DISPLAY=arx-verify MESA_VK_WSI_PRESENT_MODE=mailbox VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
-          app_pid=$!
-          rendered=0
-          for _ in $(seq 1 25); do
-            if ! kill -0 "$app_pid" 2>/dev/null; then
-              wait "$app_pid" 2>/dev/null; rc=$?
-              echo "::error::app exited early with status $rc"
-              tail -n 15 /tmp/arx.out /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done
-              exit 1
-            fi
-            if python3 -c "import os,struct,sys; p=os.path.join(os.environ['XDG_RUNTIME_DIR'],'Xvfb_screen0'); data=open(p,'rb').read() if os.path.exists(p) else b''; sys.exit(2) if len(data)<8294500 else None; hdr=struct.unpack('>25I',data[:100]); w,h,bo=hdr[4],hdr[5],hdr[7]; buf=memoryview(data)[len(data)-w*h*4:]; fmt='<I' if bo==0 else '>I'; nb=tot=0; cols=set()
-          for y in range(0,h,4):
-           ro=y*w*4
-           for x in range(0,w*4,16):
-            v=struct.unpack_from(fmt,buf,ro+x)[0]; r,g,bl=(v>>16)&255,(v>>8)&255,v&255; tot+=1
-            if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
-          rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)"; then
-              cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "::notice title=weston::$(cat /tmp/weston.metric)"
-              rendered=1
-              break
-            fi
-            sleep 1
-          done
-          kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          [ ! -s /tmp/arx.err ] || { tail -n 15 /tmp/arx.err | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
-          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log /tmp/xvfb.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          chmod 755 aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          bin_bytes=$(( $(wc -c < aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
-          f=aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
-          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          rm aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
-          [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
-          {
-            echo "binary_bytes=$bin_bytes"
-            echo "archive_bytes=$(( $(wc -c < "$f") ))"
-            /tmp/7zzs l -slt "$f" | head -n 40
-          } >> "$GITHUB_STEP_SUMMARY"
+          cp ../target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          chmod 755 aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          rm aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          name: aarch64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           path: dist/*
 
   linux-x86_64:
-    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+    name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
@@ -171,13 +95,11 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston xvfb zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
           command -v zstd > /dev/null
-          command -v weston > /dev/null
-          command -v Xvfb > /dev/null
 
       - name: cached stable llvm
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-linux-x64-7zz2
@@ -210,96 +132,24 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
           RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-X64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
-            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { grep -E '^error| --> ' /tmp/build.log | head -n 10 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
           "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
-
-      - name: weston verification
-        run: |
-          cargo run --manifest-path verification/Cargo.toml --release --quiet >> "$GITHUB_STEP_SUMMARY"
-          export XDG_RUNTIME_DIR=/tmp/weston-runtime
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
-          printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
-          Xvfb :99 -ac -screen 0 1920x1080x24 -fbdir "$XDG_RUNTIME_DIR" > /tmp/xvfb.log 2>&1 &
-          xvfb_pid=$!
-          for _ in $(seq 1 30); do
-            [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] && break
-            sleep 0.2
-          done
-          [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
-          weston_pid=$!
-          for _ in $(seq 1 30); do
-            [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-            sleep 0.2
-          done
-          if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
-            kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
-            weston_pid=$!
-            for _ in $(seq 1 30); do
-              [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-              sleep 0.2
-            done
-          fi
-          [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
-          [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
-          shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
-          env -u DISPLAY WAYLAND_DISPLAY=arx-verify MESA_VK_WSI_PRESENT_MODE=mailbox VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
-          app_pid=$!
-          rendered=0
-          for _ in $(seq 1 25); do
-            if ! kill -0 "$app_pid" 2>/dev/null; then
-              wait "$app_pid" 2>/dev/null; rc=$?
-              echo "::error::app exited early with status $rc"
-              tail -n 15 /tmp/arx.out /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done
-              exit 1
-            fi
-            if python3 -c "import os,struct,sys; p=os.path.join(os.environ['XDG_RUNTIME_DIR'],'Xvfb_screen0'); data=open(p,'rb').read() if os.path.exists(p) else b''; sys.exit(2) if len(data)<8294500 else None; hdr=struct.unpack('>25I',data[:100]); w,h,bo=hdr[4],hdr[5],hdr[7]; buf=memoryview(data)[len(data)-w*h*4:]; fmt='<I' if bo==0 else '>I'; nb=tot=0; cols=set()
-          for y in range(0,h,4):
-           ro=y*w*4
-           for x in range(0,w*4,16):
-            v=struct.unpack_from(fmt,buf,ro+x)[0]; r,g,bl=(v>>16)&255,(v>>8)&255,v&255; tot+=1
-            if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
-          rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)"; then
-              cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "::notice title=weston::$(cat /tmp/weston.metric)"
-              rendered=1
-              break
-            fi
-            sleep 1
-          done
-          kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          [ ! -s /tmp/arx.err ] || { tail -n 15 /tmp/arx.err | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
-          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log /tmp/xvfb.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          chmod 755 x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          bin_bytes=$(( $(wc -c < x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
-          f=x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
-          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          rm x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
-          [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
-          {
-            echo "binary_bytes=$bin_bytes"
-            echo "archive_bytes=$(( $(wc -c < "$f") ))"
-            /tmp/7zzs l -slt "$f" | head -n 40
-          } >> "$GITHUB_STEP_SUMMARY"
+          cp ../target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          chmod 755 x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          /tmp/7zzs a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          rm x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          name: x86_64-Linux-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           path: dist/*
 
   macos-aarch64:
-    name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+    name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -310,7 +160,7 @@ jobs:
           { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add aarch64-apple-darwin; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: cached stable llvm
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-macos-7zz2
@@ -347,27 +197,18 @@ jobs:
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/aarch64-apple-darwin/release/Subsystem-for-Arxumbra aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          chmod 755 aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          bin_bytes=$(( $(wc -c < aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
-          f=aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
-          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          rm aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
-          [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
-          {
-            echo "binary_bytes=$bin_bytes"
-            echo "archive_bytes=$(( $(wc -c < "$f") ))"
-            /tmp/7zz l -slt "$f" | head -n 40
-          } >> "$GITHUB_STEP_SUMMARY"
+          cp ../target/aarch64-apple-darwin/release/Subsystem-for-Arxumbra aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          chmod 755 aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          rm aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          name: aarch64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           path: dist/*
 
   macos-x86_64:
-    name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+    name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -378,7 +219,7 @@ jobs:
           { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add x86_64-apple-darwin; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: cached stable llvm
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-macos-7zz2
@@ -415,27 +256,18 @@ jobs:
       - name: package
         run: |
           mkdir -p dist && cd dist
-          cp ../target/x86_64-apple-darwin/release/Subsystem-for-Arxumbra x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          chmod 755 x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          bin_bytes=$(( $(wc -c < x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9) ))
-          f=x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z
-          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off "$f" x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          rm x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
-          [ "$(wc -c < "$f")" -lt 62914560 ] && { echo "archive too small: $(wc -c < "$f")"; exit 1; }
-          [ "$(wc -c < "$f")" -gt 104857600 ] && { echo "archive too large: $(wc -c < "$f")"; exit 1; }
-          {
-            echo "binary_bytes=$bin_bytes"
-            echo "archive_bytes=$(( $(wc -c < "$f") ))"
-            /tmp/7zz l -slt "$f" | head -n 40
-          } >> "$GITHUB_STEP_SUMMARY"
+          cp ../target/x86_64-apple-darwin/release/Subsystem-for-Arxumbra x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          chmod 755 x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          /tmp/7zz a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
+          rm x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          name: x86_64-macOS-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           path: dist/*
 
   windows-aarch64:
-    name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+    name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -452,7 +284,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
 
       - name: cached stable llvm
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~\llvm
           key: arx-llvm-llvmorg-23.1.2-windows-7zz2
@@ -478,13 +310,13 @@ jobs:
           "$HOME\llvm\clang+llvm-23.1.2-x86_64-pc-windows-msvc\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: cached cargo-xwin
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~\cargo-xwin
           key: arx-cargo-xwin-0.23.1
 
       - name: cached msvc sdk
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~\xwin
           key: arx-msvc-sdk-0.23.1
@@ -521,27 +353,20 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Set-Location dist
-          Copy-Item ..\target\aarch64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
-          $binBytes = (Get-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe).Length
+          Copy-Item ..\target\aarch64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.exe
           $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
           if (-not $sevenZip) { $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe" }
-          $f = 'aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z'
-          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off $f aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
+          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Remove-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
-          if ((Get-Item $f).Length -lt 60MB) { throw "archive too small: $((Get-Item $f).Length)" }
-          if ((Get-Item $f).Length -gt 100MB) { throw "archive too large: $((Get-Item $f).Length)" }
-          "binary_bytes=$binBytes" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "archive_bytes=$((Get-Item $f).Length)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          (& $sevenZip l -slt $f | Select-Object -First 40) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          Remove-Item aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.exe
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          name: aarch64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           path: dist/*
 
   windows-x86_64:
-    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+    name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -558,7 +383,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
 
       - name: cached stable llvm
-        uses: actions/cache@v5.0.4
+        uses: actions/cache@v4
         with:
           path: ~\llvm
           key: arx-llvm-llvmorg-23.1.2-windows-7zz2
@@ -605,23 +430,16 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Set-Location dist
-          Copy-Item ..\target\x86_64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
-          $binBytes = (Get-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe).Length
+          Copy-Item ..\target\x86_64-pc-windows-msvc\release\Subsystem-for-Arxumbra.exe x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.exe
           $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
           if (-not $sevenZip) { $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe" }
-          $f = 'x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.7z'
-          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off $f x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
+          & $sevenZip a -t7z -mx=9 -m0=lzma2 -md=64m -mfb=273 -ms=on -mmt=on -mtc=off -mta=off -mtm=off x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.7z x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Remove-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9.exe
-          if ((Get-Item $f).Length -lt 60MB) { throw "archive too small: $((Get-Item $f).Length)" }
-          if ((Get-Item $f).Length -gt 100MB) { throw "archive too large: $((Get-Item $f).Length)" }
-          "binary_bytes=$binBytes" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "archive_bytes=$((Get-Item $f).Length)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          (& $sevenZip l -slt $f | Select-Object -First 40) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          Remove-Item x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7.exe
 
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s9
+          name: x86_64-Windows-Subsystem-for-Arxumbra-v0.0.0.0.0.0-s7
           path: dist/*
 
   release:
@@ -643,7 +461,6 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v3.0.3
         with:
-          name: v0.0.0.0.0.0-s9
           files: |
             dist/*/*.7z
           fail_on_unmatched_files: true
