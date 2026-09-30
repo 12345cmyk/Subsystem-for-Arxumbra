@@ -183,7 +183,7 @@ fn main() {
     let mut escape_since: Option<std::time::Instant> = None;
     let mut idle_deadline: Option<std::time::Instant> = None;
     bevy::app::App::new()
-        .insert_resource(bevy::color::ClearColor(bevy::color::Color::BLACK))
+        .insert_resource(bevy::camera::ClearColor(bevy::color::Color::BLACK))
         .add_plugins((
             bevy::app::TaskPoolPlugin::default(),
             bevy::diagnostic::FrameCountPlugin,
@@ -212,13 +212,12 @@ fn main() {
                 close_when_requested: true,
             },
             bevy::asset::AssetPlugin::default(),
-            bevy::winit::WinitPlugin::default(),
         ))
         .add_plugins((
+            bevy::winit::WinitPlugin::default(),
             bevy::image::ImagePlugin::default(),
             bevy::mesh::MeshPlugin,
             bevy::camera::CameraPlugin,
-            bevy::light::LightPlugin,
             bevy::render::RenderPlugin {
                 render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
                     bevy::render::settings::WgpuSettings {
