@@ -32,7 +32,7 @@ jobs:
           command -v zstd > /dev/null
 
       - name: cached stable llvm
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-linux-arm64-7zz2
@@ -108,7 +108,7 @@ jobs:
           command -v zstd > /dev/null
 
       - name: cached stable llvm
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-linux-x64-7zz2
@@ -178,7 +178,7 @@ jobs:
           { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add aarch64-apple-darwin; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: cached stable llvm
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-macos-7zz2
@@ -246,7 +246,7 @@ jobs:
           { rustup toolchain install nightly --profile minimal -c rust-src && rustup default nightly && rustup target add x86_64-apple-darwin; } > /tmp/rustup.log 2>&1 || { cat /tmp/rustup.log; exit 1; }
 
       - name: cached stable llvm
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~/llvm
           key: arx-llvm-llvmorg-23.1.2-macos-7zz2
@@ -320,7 +320,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
 
       - name: cached stable llvm
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~\llvm
           key: arx-llvm-llvmorg-23.1.2-windows-7zz2
@@ -346,13 +346,13 @@ jobs:
           "$HOME\llvm\clang+llvm-23.1.2-x86_64-pc-windows-msvc\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: cached cargo-xwin
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~\cargo-xwin
           key: arx-cargo-xwin-0.23.1
 
       - name: cached msvc sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~\xwin
           key: arx-msvc-sdk-0.23.1
@@ -426,7 +426,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-Content "$env:TEMP\rustup.log"; exit 1 }
 
       - name: cached stable llvm
-        uses: actions/cache@v4
+        uses: actions/cache@v5.0.4
         with:
           path: ~\llvm
           key: arx-llvm-llvmorg-23.1.2-windows-7zz2
