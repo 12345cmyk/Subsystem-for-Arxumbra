@@ -31,7 +31,7 @@ fn main() {
     let menu_levels =
         (menu.level_count().max(1)).min(select_level(menu_width, menu_height, 13, 1, 1) + 1);
     let cursor_levels =
-        (cursor.level_count().max(1)).min(select_level(cursor_width, cursor_height, 11, 1, 1) + 1);
+        (cursor.level_count().max(1)).min(select_level(cursor_width, cursor_height, 13, 1, 1) + 1);
     let level_bytes: fn(u32, u32, u32) -> usize = |w, h, level| {
         let lw = (w >> level).max(1);
         let lh = (h >> level).max(1);
@@ -55,6 +55,7 @@ fn main() {
     let menu_head_bytes = level_bytes(menu_width, menu_height, 0);
     let menu_total_bytes =
         (0..menu_levels).fold(0usize, |acc, level| acc + level_bytes(menu_width, menu_height, level));
+    let cursor_head_bytes = level_bytes(cursor_width, cursor_height, 0);
     let cursor_total_bytes = (0..cursor_levels).fold(0usize, |acc, level| {
         acc + level_bytes(cursor_width, cursor_height, level)
     });
@@ -65,7 +66,7 @@ fn main() {
         let (background_head, background_tail) =
             background_pixels.split_at_mut(background_head_bytes);
         let (menu_head, menu_tail) = menu_pixels.split_at_mut(menu_head_bytes);
-        let cursor_slice = &mut cursor_pixels[..];
+        let (cursor_head, cursor_tail) = cursor_pixels.split_at_mut(cursor_head_bytes);
         let background_ref = &background;
         let menu_ref = &menu;
         let cursor_ref = &cursor;
@@ -100,12 +101,15 @@ fn main() {
                     level += 1;
                 }
             });
-            let cursor_job = scope.spawn(move || {
+            let cursor_head_job = scope.spawn(move || {
+                transcode_level(cursor_ref, 0, cursor_head);
+            });
+            let cursor_tail_job = scope.spawn(move || {
                 let mut offset = 0usize;
-                let mut level = 0u32;
+                let mut level = 1u32;
                 while level < cursor_levels {
                     let size = level_bytes(cursor_width, cursor_height, level);
-                    transcode_level(cursor_ref, level, &mut cursor_slice[offset..offset + size]);
+                    transcode_level(cursor_ref, level, &mut cursor_tail[offset..offset + size]);
                     offset += size;
                     level += 1;
                 }
@@ -114,7 +118,8 @@ fn main() {
             bg_tail_job.join().expect("background tail thread");
             menu_head_job.join().expect("menu head thread");
             menu_tail_job.join().expect("menu tail thread");
-            cursor_job.join().expect("cursor thread");
+            cursor_head_job.join().expect("cursor head thread");
+            cursor_tail_job.join().expect("cursor tail thread");
         });
     }
     drop(cursor);

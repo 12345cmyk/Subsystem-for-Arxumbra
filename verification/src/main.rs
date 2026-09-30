@@ -84,6 +84,7 @@ fn main() {
     let menu_total_bytes = (0..menu_levels)
         .map(|mip| level_bytes(menu_w, menu_h, mip))
         .sum::<usize>();
+    let cur_head_bytes = level_bytes(cur_w, cur_h, 0);
     let cur_total_bytes = (0..cur_levels)
         .map(|mip| level_bytes(cur_w, cur_h, mip))
         .sum::<usize>();
@@ -95,7 +96,7 @@ fn main() {
     {
         let (bg_head, bg_tail) = bg_pixels.split_at_mut(bg_head_bytes);
         let (menu_head, menu_tail) = menu_pixels.split_at_mut(menu_head_bytes);
-        let cur_slice = &mut cur_pixels[..];
+        let (cur_head, cur_tail) = cur_pixels.split_at_mut(cur_head_bytes);
         let bg_ref = &background;
         let menu_ref = &menu;
         let cur_ref = &cursor;
@@ -150,18 +151,28 @@ fn main() {
                     offset += sz;
                 }
             });
-            let cur_job = scope.spawn(move || {
+            let cur_head_job = scope.spawn(move || {
+                cur_ref
+                    .transcode_into(
+                        0,
+                        basisu::TargetFormat::Bc7Rgba,
+                        basisu::DecodeFlags::NONE,
+                        cur_head,
+                    )
+                    .expect("cur head");
+            });
+            let cur_tail_job = scope.spawn(move || {
                 let mut offset = 0usize;
-                for level in 0..cur_levels {
+                for level in 1..cur_levels {
                     let sz = level_bytes(cur_w, cur_h, level);
                     cur_ref
                         .transcode_into(
                             level,
                             basisu::TargetFormat::Bc7Rgba,
                             basisu::DecodeFlags::NONE,
-                            &mut cur_slice[offset..offset + sz],
+                            &mut cur_tail[offset..offset + sz],
                         )
-                        .expect("cur");
+                        .expect("cur tail");
                     offset += sz;
                 }
             });
@@ -169,7 +180,8 @@ fn main() {
             bg_tail_job.join().expect("bg tail join");
             menu_head_job.join().expect("menu head join");
             menu_tail_job.join().expect("menu tail join");
-            cur_job.join().expect("cur join");
+            cur_head_job.join().expect("cur head join");
+            cur_tail_job.join().expect("cur tail join");
         });
     }
     let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
