@@ -15,28 +15,43 @@ fn main() {
     let (background_width, background_height) = background.base_dimensions();
     let (menu_width, menu_height) = menu.base_dimensions();
     let (cursor_width, cursor_height) = cursor.base_dimensions();
-    let background_levels = background.level_count().max(1);
-    let menu_levels = menu.level_count().max(1);
-    let cursor_levels = cursor.level_count().max(1);
-    let background_head_bytes = (((background_width + 3) >> 2) as usize)
-        * (((background_height + 3) >> 2) as usize)
-        * 16;
+    let select_level: fn(u32, u32, u32, u32, u32) -> u32 =
+        |source_width, source_height, levels, need_width, need_height| {
+            (31 - (((source_width / need_width).min(source_height / need_height)).max(1))
+                .leading_zeros())
+            .min(levels - 1)
+        };
+    let background_levels = (background.level_count().max(1))
+        .min(select_level(background_width, background_height, 13, 1, 1) + 1);
+    let menu_levels =
+        (menu.level_count().max(1)).min(select_level(menu_width, menu_height, 13, 1, 1) + 1);
+    let cursor_levels =
+        (cursor.level_count().max(1)).min(select_level(cursor_width, cursor_height, 11, 1, 1) + 1);
+    let level_bytes: fn(u32, u32, u32) -> usize = |w, h, level| {
+        let lw = (w >> level).max(1);
+        let lh = (h >> level).max(1);
+        (((lw + 3) >> 2) as usize) * (((lh + 3) >> 2) as usize) * 16
+    };
+    let transcode_level: fn(&basisu::Transcoder<'static>, u32, &mut [u8]) =
+        |transcoder, level, dst| {
+            transcoder
+                .transcode_into(
+                    level,
+                    basisu::TargetFormat::Bc7Rgba,
+                    basisu::DecodeFlags::NONE,
+                    dst,
+                )
+                .expect("bc7 transcode");
+        };
+    let background_head_bytes = level_bytes(background_width, background_height, 0);
     let background_total_bytes = (0..background_levels).fold(0usize, |acc, level| {
-        let w = (background_width >> level).max(1);
-        let h = (background_height >> level).max(1);
-        acc + (((w + 3) >> 2) as usize) * (((h + 3) >> 2) as usize) * 16
+        acc + level_bytes(background_width, background_height, level)
     });
-    let menu_head_bytes =
-        (((menu_width + 3) >> 2) as usize) * (((menu_height + 3) >> 2) as usize) * 16;
-    let menu_total_bytes = (0..menu_levels).fold(0usize, |acc, level| {
-        let w = (menu_width >> level).max(1);
-        let h = (menu_height >> level).max(1);
-        acc + (((w + 3) >> 2) as usize) * (((h + 3) >> 2) as usize) * 16
-    });
+    let menu_head_bytes = level_bytes(menu_width, menu_height, 0);
+    let menu_total_bytes =
+        (0..menu_levels).fold(0usize, |acc, level| acc + level_bytes(menu_width, menu_height, level));
     let cursor_total_bytes = (0..cursor_levels).fold(0usize, |acc, level| {
-        let w = (cursor_width >> level).max(1);
-        let h = (cursor_height >> level).max(1);
-        acc + (((w + 3) >> 2) as usize) * (((h + 3) >> 2) as usize) * 16
+        acc + level_bytes(cursor_width, cursor_height, level)
     });
     let mut background_pixels = vec![0u8; background_total_bytes];
     let mut menu_pixels = vec![0u8; menu_total_bytes];
@@ -51,59 +66,31 @@ fn main() {
         let cursor_ref = &cursor;
         std::thread::scope(|scope| {
             let bg_head_job = scope.spawn(move || {
-                background_ref
-                    .transcode_into(
-                        0,
-                        basisu::TargetFormat::Bc7Rgba,
-                        basisu::DecodeFlags::NONE,
-                        background_head,
-                    )
-                    .expect("background head transcode");
+                transcode_level(background_ref, 0, background_head);
             });
             let bg_tail_job = scope.spawn(move || {
                 let mut offset = 0usize;
                 let mut level = 1u32;
                 while level < background_levels {
-                    let w = (background_width >> level).max(1);
-                    let h = (background_height >> level).max(1);
-                    let size = (((w + 3) >> 2) as usize) * (((h + 3) >> 2) as usize) * 16;
-                    background_ref
-                        .transcode_into(
-                            level,
-                            basisu::TargetFormat::Bc7Rgba,
-                            basisu::DecodeFlags::NONE,
-                            &mut background_tail[offset..offset + size],
-                        )
-                        .expect("background tail transcode");
+                    let size = level_bytes(background_width, background_height, level);
+                    transcode_level(
+                        background_ref,
+                        level,
+                        &mut background_tail[offset..offset + size],
+                    );
                     offset += size;
                     level += 1;
                 }
             });
             let menu_head_job = scope.spawn(move || {
-                menu_ref
-                    .transcode_into(
-                        0,
-                        basisu::TargetFormat::Bc7Rgba,
-                        basisu::DecodeFlags::NONE,
-                        menu_head,
-                    )
-                    .expect("menu head transcode");
+                transcode_level(menu_ref, 0, menu_head);
             });
             let menu_tail_job = scope.spawn(move || {
                 let mut offset = 0usize;
                 let mut level = 1u32;
                 while level < menu_levels {
-                    let w = (menu_width >> level).max(1);
-                    let h = (menu_height >> level).max(1);
-                    let size = (((w + 3) >> 2) as usize) * (((h + 3) >> 2) as usize) * 16;
-                    menu_ref
-                        .transcode_into(
-                            level,
-                            basisu::TargetFormat::Bc7Rgba,
-                            basisu::DecodeFlags::NONE,
-                            &mut menu_tail[offset..offset + size],
-                        )
-                        .expect("menu tail transcode");
+                    let size = level_bytes(menu_width, menu_height, level);
+                    transcode_level(menu_ref, level, &mut menu_tail[offset..offset + size]);
                     offset += size;
                     level += 1;
                 }
@@ -112,17 +99,8 @@ fn main() {
                 let mut offset = 0usize;
                 let mut level = 0u32;
                 while level < cursor_levels {
-                    let w = (cursor_width >> level).max(1);
-                    let h = (cursor_height >> level).max(1);
-                    let size = (((w + 3) >> 2) as usize) * (((h + 3) >> 2) as usize) * 16;
-                    cursor_ref
-                        .transcode_into(
-                            level,
-                            basisu::TargetFormat::Bc7Rgba,
-                            basisu::DecodeFlags::NONE,
-                            &mut cursor_slice[offset..offset + size],
-                        )
-                        .expect("cursor transcode");
+                    let size = level_bytes(cursor_width, cursor_height, level);
+                    transcode_level(cursor_ref, level, &mut cursor_slice[offset..offset + size]);
                     offset += size;
                     level += 1;
                 }
@@ -149,48 +127,47 @@ fn main() {
         }
         .into(),
     );
-    let mut background_image = bevy::image::Image::new(
-        bevy::render::render_resource::Extent3d {
-            width: background_width,
-            height: background_height,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
+    let make_image: fn(u32, u32, u32, Vec<u8>, bevy::image::ImageSampler) -> bevy::image::Image =
+        |width, height, levels, pixels, sampler| {
+            let mut image = bevy::image::Image::new(
+                bevy::render::render_resource::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                bevy::render::render_resource::TextureDimension::D2,
+                pixels,
+                bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+            );
+            image.texture_descriptor.mip_level_count = levels;
+            image.sampler = sampler;
+            image
+        };
+    let mut background_upload = Some(make_image(
+        background_width,
+        background_height,
+        background_levels,
         background_pixels,
-        bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    );
-    background_image.texture_descriptor.mip_level_count = background_levels;
-    background_image.sampler = sampler_descriptor.clone();
-    let mut menu_image = bevy::image::Image::new(
-        bevy::render::render_resource::Extent3d {
-            width: menu_width,
-            height: menu_height,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
+        sampler_descriptor.clone(),
+    ));
+    let mut menu_upload = Some(make_image(
+        menu_width,
+        menu_height,
+        menu_levels,
         menu_pixels,
-        bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    );
-    menu_image.texture_descriptor.mip_level_count = menu_levels;
-    menu_image.sampler = sampler_descriptor.clone();
-    let mut cursor_image = bevy::image::Image::new(
-        bevy::render::render_resource::Extent3d {
-            width: cursor_width,
-            height: cursor_height,
-            depth_or_array_layers: 1,
-        },
-        bevy::render::render_resource::TextureDimension::D2,
+        sampler_descriptor.clone(),
+    ));
+    let mut cursor_upload = Some(make_image(
+        cursor_width,
+        cursor_height,
+        cursor_levels,
         cursor_pixels,
-        bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-        bevy::asset::RenderAssetUsages::RENDER_WORLD,
-    );
-    cursor_image.texture_descriptor.mip_level_count = cursor_levels;
-    cursor_image.sampler = sampler_descriptor;
-    let mut background_upload = Some(background_image);
-    let mut menu_upload = Some(menu_image);
-    let mut cursor_upload = Some(cursor_image);
+        sampler_descriptor,
+    ));
+    let fullscreen =
+        bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
+    let smootherstep: fn(f32) -> f32 = |t| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
     let mut phase: u8 = 0;
     let mut warmup_frames: u16 = 180;
     let mut viewport: (u32, u32) = (0, 0);
@@ -218,9 +195,7 @@ fn main() {
                 primary_window: Some(bevy::window::Window {
                     title: String::from("Subsystem for Arxumbra"),
                     name: Some(String::from("subsystem-for-arxumbra")),
-                    mode: bevy::window::WindowMode::BorderlessFullscreen(
-                        bevy::window::MonitorSelection::Primary,
-                    ),
+                    mode: fullscreen,
                     present_mode: bevy::window::PresentMode::AutoVsync,
                     decorations: false,
                     resizable: false,
@@ -238,6 +213,8 @@ fn main() {
             },
             bevy::asset::AssetPlugin::default(),
             bevy::winit::WinitPlugin::default(),
+        ))
+        .add_plugins((
             bevy::image::ImagePlugin::default(),
             bevy::mesh::MeshPlugin,
             bevy::camera::CameraPlugin,
@@ -292,14 +269,8 @@ fn main() {
                 let delta = time.delta_secs().min(0.05);
                 let booting = phase == 0;
                 let (window_entity, mut window) = windows.single_mut().expect("primary window");
-                if window.mode
-                    != bevy::window::WindowMode::BorderlessFullscreen(
-                        bevy::window::MonitorSelection::Primary,
-                    )
-                {
-                    window.mode = bevy::window::WindowMode::BorderlessFullscreen(
-                        bevy::window::MonitorSelection::Primary,
-                    );
+                if window.mode != fullscreen {
+                    window.mode = fullscreen;
                 }
                 if window.present_mode != bevy::window::PresentMode::AutoVsync {
                     window.present_mode = bevy::window::PresentMode::AutoVsync;
@@ -414,10 +385,7 @@ fn main() {
                     if let Ok((mut transform, mut sprite, mut visibility, _)) =
                         sprites.get_mut(panel_entity)
                     {
-                        let eased = panel_progress
-                            * panel_progress
-                            * panel_progress
-                            * (panel_progress * (panel_progress * 6.0 - 15.0) + 10.0);
+                        let eased = smootherstep(panel_progress);
                         transform.translation.x = closed + (open_x - closed) * eased;
                         sprite.custom_size = Some(bevy::math::Vec2::new(panel_width, height));
                         if panel_progress > 0.0 {
@@ -452,7 +420,7 @@ fn main() {
                     {
                         for (_, _, _, mesh2d) in sprites.iter_mut() {
                             if let Some(mut mesh) = mesh2d {
-                                mesh.set_changed();
+                                mesh.0 = mesh.0.clone();
                             }
                         }
                     }
@@ -499,10 +467,7 @@ fn main() {
                         (panel_progress - delta / 0.8).max(0.0)
                     };
                     panel_progress = progress;
-                    let eased = progress
-                        * progress
-                        * progress
-                        * (progress * (progress * 6.0 - 15.0) + 10.0);
+                    let eased = smootherstep(progress);
                     if let Ok((mut transform, _, mut visibility, _)) =
                         sprites.get_mut(panel_entity)
                     {

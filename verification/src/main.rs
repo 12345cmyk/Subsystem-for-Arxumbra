@@ -10,7 +10,8 @@ fn main() {
         "BUFFER_BINDING_ARRAY",
         "NoFrustumCulling",
         "FrameCountPlugin",
-        "mesh.set_changed()",
+        "mesh.0 = mesh.0.clone()",
+        "(31 - (((source_width / need_width).min(source_height / need_height)).max(1))",
     ] {
         assert!(
             main_source.contains(required_token),

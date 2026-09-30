@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   linux-aarch64:
@@ -68,7 +68,7 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
           RUSTFLAGS="-C target-cpu=generic -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
-            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
+            cargo build --release --locked --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { tail -n 15 /tmp/build.log | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
           "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
 
       - name: weston verification
@@ -91,7 +91,7 @@ jobs:
           app_pid=$!
           rendered=0
           for _ in $(seq 1 45); do
-            kill -0 "$app_pid" 2>/dev/null || { cat /tmp/arx.err; cat /tmp/weston.log; exit 1; }
+            kill -0 "$app_pid" 2>/dev/null || { tail -n 15 /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
             rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
             if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify weston-screenshooter >/dev/null 2>&1); then
               if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
@@ -115,7 +115,10 @@ jobs:
             for x in range(0,s,bpp*4):
              r,g,bl=row[x],row[x+1],row[x+2]; tot+=1
              if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
-          rat=nb/max(tot,1); print(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)" >> "$GITHUB_STEP_SUMMARY"; then
+          rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)"; then
+                cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "::notice title=weston::$(cat /tmp/weston.metric)"
                 rendered=1
                 break
               fi
@@ -126,8 +129,8 @@ jobs:
           wait "$app_pid" 2>/dev/null || true
           kill -TERM "$weston_pid" 2>/dev/null || true
           wait "$weston_pid" 2>/dev/null || true
-          [ ! -s /tmp/arx.err ] || { cat /tmp/arx.err; exit 1; }
-          [ "$rendered" -eq 1 ] || { cat /tmp/weston.log; exit 1; }
+          [ ! -s /tmp/arx.err ] || { tail -n 15 /tmp/arx.err | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
       - name: package
         run: |
@@ -203,7 +206,7 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'false'
         run: |
           RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-X64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none -Zfmt-debug=none" \
-            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort'
+            cargo build --release --locked --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { tail -n 15 /tmp/build.log | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
           "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
 
       - name: weston verification
@@ -226,7 +229,7 @@ jobs:
           app_pid=$!
           rendered=0
           for _ in $(seq 1 45); do
-            kill -0 "$app_pid" 2>/dev/null || { cat /tmp/arx.err; cat /tmp/weston.log; exit 1; }
+            kill -0 "$app_pid" 2>/dev/null || { tail -n 15 /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
             rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
             if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify weston-screenshooter >/dev/null 2>&1); then
               if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
@@ -250,7 +253,10 @@ jobs:
             for x in range(0,s,bpp*4):
              r,g,bl=row[x],row[x+1],row[x+2]; tot+=1
              if r>8 or g>8 or bl>8: nb+=1; cols.add((r>>2,g>>2,bl>>2))
-          rat=nb/max(tot,1); print(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)" >> "$GITHUB_STEP_SUMMARY"; then
+          rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.50 and len(cols)>=64) else 3)"; then
+                cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
+                echo "" >> "$GITHUB_STEP_SUMMARY"
+                echo "::notice title=weston::$(cat /tmp/weston.metric)"
                 rendered=1
                 break
               fi
@@ -261,8 +267,8 @@ jobs:
           wait "$app_pid" 2>/dev/null || true
           kill -TERM "$weston_pid" 2>/dev/null || true
           wait "$weston_pid" 2>/dev/null || true
-          [ ! -s /tmp/arx.err ] || { cat /tmp/arx.err; exit 1; }
-          [ "$rendered" -eq 1 ] || { cat /tmp/weston.log; exit 1; }
+          [ ! -s /tmp/arx.err ] || { tail -n 15 /tmp/arx.err | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+          [ "$rendered" -eq 1 ] || { tail -n 15 /tmp/weston.metric /tmp/weston.log 2>/dev/null | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
 
       - name: package
         run: |
