@@ -2,7 +2,7 @@
   "schema": 1,
   "project": "Subsystem-for-Arxumbra",
   "repository": "https://github.com/12345cmyk/Subsystem-for-Arxumbra",
-  "updated_utc": "2026-09-29T23:15:00Z",
+  "updated_utc": "2026-09-30T23:50:00Z",
   "versions": [
     {
       "version": "v0.0.0.0.0.0-s0",
@@ -207,9 +207,29 @@
       "cargo_version": "0.0.9",
       "source": "v0.0.0.0.0.0-s8",
       "status": "candidate",
-      "commit": "STATUS: PENDING RELEASE RUN",
+      "commit": "f1e138bf9d",
       "dates": {
         "commit_utc": "2026-09-29T23:15:00Z",
+        "release_published_utc": "STATUS: PENDING RELEASE RUN",
+        "assets_uploaded_utc": "STATUS: PENDING RELEASE RUN"
+      },
+      "run": {
+        "id": 36779451230,
+        "conclusion": "success",
+        "total_minutes": 18
+      },
+      "packaging": "7z",
+      "assets": [],
+      "report": "reports/v0.0.0.0.0.0-s9.md"
+    },
+    {
+      "version": "v0.0.0.0.0.0-s10",
+      "cargo_version": "0.0.10",
+      "source": "v0.0.0.0.0.0-s9",
+      "status": "candidate",
+      "commit": "STATUS: PENDING RELEASE RUN",
+      "dates": {
+        "commit_utc": "2026-09-30T23:50:00Z",
         "release_published_utc": "STATUS: PENDING RELEASE RUN",
         "assets_uploaded_utc": "STATUS: PENDING RELEASE RUN"
       },
@@ -220,7 +240,7 @@
       },
       "packaging": "7z",
       "assets": [],
-      "report": "reports/v0.0.0.0.0.0-s9.md"
+      "report": "reports/v0.0.0.0.0.0-s10.md"
     }
   ]
 }

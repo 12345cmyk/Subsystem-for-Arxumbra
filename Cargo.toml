@@ -2,13 +2,13 @@ cargo-features = ["panic-immediate-abort"]
 
 [package]
 name = "Subsystem-for-Arxumbra"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2024"
 
 [dependencies]
-basisu = "0.1"
-mimalloc = "0.1"
-bevy = { version = "0.20.0-rc.1", default-features = false, features = [
+basisu = { git = "https://github.com/marcogomez/basisu" }
+mimalloc = { git = "https://github.com/purpleprotocol/mimalloc_rust" }
+bevy = { git = "https://github.com/bevyengine/bevy", tag = "v0.20.0-rc.2", default-features = false, features = [
     "std",
     "multi_threaded",
     "keyboard",
@@ -22,4 +22,3 @@ bevy = { version = "0.20.0-rc.1", default-features = false, features = [
     "bevy_sprite_render",
     "wayland",
 ] }
-
