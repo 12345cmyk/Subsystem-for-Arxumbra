@@ -159,34 +159,32 @@ fn main() {
         );
     }
 
-    let transcode_chain = |transcoder: &basisu::Transcoder<'static>,
-                           w: u32,
-                           h: u32,
-                           lvl: u32,
-                           mips: u32|
-     -> usize {
-        let mut sizes = [0usize; 16];
-        let mut total = 0usize;
-        for (i, slot) in sizes[..mips as usize].iter_mut().enumerate() {
-            let sz = level_bytes(w, h, lvl + i as u32);
-            *slot = sz;
-            total += sz;
-        }
-        let mut buf = vec![0u8; total];
-        let mut off = 0usize;
-        for (i, &sz) in sizes[..mips as usize].iter().enumerate() {
-            transcoder
-                .transcode_into(
-                    lvl + i as u32,
-                    basisu::TargetFormat::Bc7Rgba,
-                    basisu::DecodeFlags::NONE,
-                    &mut buf[off..off + sz],
-                )
-                .expect("chain transcode");
-            off += sz;
-        }
-        total
-    };
+    let transcode_chain: fn(&basisu::Transcoder<'static>, u32, u32, u32, u32) -> usize =
+        |transcoder, w, h, lvl, mips| {
+            let mut sizes = [0usize; 16];
+            let mut total = 0usize;
+            for (i, slot) in sizes[..mips as usize].iter_mut().enumerate() {
+                let bp = ((((w >> (lvl + i as u32)).max(1) + 3) >> 2) as usize)
+                    * ((((h >> (lvl + i as u32)).max(1) + 3) >> 2) as usize);
+                let sz = bp << 4;
+                *slot = sz;
+                total += sz;
+            }
+            let mut buf = vec![0u8; total];
+            let mut off = 0usize;
+            for (i, &sz) in sizes[..mips as usize].iter().enumerate() {
+                transcoder
+                    .transcode_into(
+                        lvl + i as u32,
+                        basisu::TargetFormat::Bc7Rgba,
+                        basisu::DecodeFlags::NONE,
+                        &mut buf[off..off + sz],
+                    )
+                    .expect("chain transcode");
+                off += sz;
+            }
+            total
+        };
 
     for (vw, vh) in [(1920u32, 1080u32), (3840u32, 2160u32)] {
         let width = vw as f32;
@@ -216,10 +214,13 @@ fn main() {
         };
 
         let start = std::time::Instant::now();
+        let bg_ref = &background;
+        let menu_ref = &menu;
         let (bg_bytes, menu_bytes, cur_bytes) = std::thread::scope(|scope| {
-            let bg_job = scope.spawn(|| transcode_chain(&background, bg_w, bg_h, bg_lvl, bg_mips));
+            let bg_job =
+                scope.spawn(move || transcode_chain(bg_ref, bg_w, bg_h, bg_lvl, bg_mips));
             let menu_job =
-                scope.spawn(|| transcode_chain(&menu, menu_w, menu_h, menu_lvl, menu_mips));
+                scope.spawn(move || transcode_chain(menu_ref, menu_w, menu_h, menu_lvl, menu_mips));
             let cur_bytes = transcode_chain(&cursor, cur_w, cur_h, cur_lvl, cur_mips);
             (
                 bg_job.join().expect("bg join"),

@@ -21,17 +21,9 @@ fn main() {
         bevy::math::Vec2::new(background_width as f32, background_height as f32);
     let low_power =
         bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs(1));
-    let smootherstep = |t: f32| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    let smootherstep: fn(f32) -> f32 = |t| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
     let mut phase: u8 = 0;
     let mut viewport: (u32, u32) = (0, 0);
-    let mut width: f32 = 0.0;
-    let mut height: f32 = 0.0;
-    let mut panel_width: f32 = 0.0;
-    let mut panel_open_x: f32 = 0.0;
-    let mut panel_closed_x: f32 = 0.0;
-    let mut cursor_extent: f32 = 28.0;
-    let mut cover: f32 = 1.0;
-    let mut cursor_limit = bevy::math::Vec2::ZERO;
     let mut background_level: u32 = u32::MAX;
     let mut background_mips: u32 = u32::MAX;
     let mut menu_level: u32 = u32::MAX;
@@ -179,21 +171,21 @@ fn main() {
                 if physical_width == 0 || physical_height == 0 {
                     return;
                 }
+                let width = physical_width as f32;
+                let height = physical_height as f32;
+                let panel_width = width * 0.21;
+                let panel_open_x = panel_width * 0.5 - width * 0.5;
+                let panel_closed_x = panel_open_x - panel_width * 1.05;
+                let cursor_extent = (height * 0.055).clamp(28.0, 320.0);
+                let cover = (width / background_size.x).max(height / background_size.y);
+                let cursor_limit = bevy::math::Vec2::new(
+                    (width - cursor_extent).max(0.0) * 0.5,
+                    (height - cursor_extent).max(0.0) * 0.5,
+                );
                 let geometry_changed = (physical_width, physical_height) != viewport;
                 if booting || geometry_changed {
-                    width = physical_width as f32;
-                    height = physical_height as f32;
-                    panel_width = width * 0.21;
-                    panel_open_x = panel_width * 0.5 - width * 0.5;
-                    panel_closed_x = panel_open_x - panel_width * 1.05;
-                    cursor_extent = (height * 0.055).clamp(28.0, 320.0);
-                    cover = (width / background_size.x).max(height / background_size.y);
-                    cursor_limit = bevy::math::Vec2::new(
-                        (width - cursor_extent).max(0.0) * 0.5,
-                        (height - cursor_extent).max(0.0) * 0.5,
-                    );
-                    let select_level =
-                        |source_width: u32, source_height: u32, levels: u32, need_width: u32, need_height: u32| -> u32 {
+                    let select_level: fn(u32, u32, u32, u32, u32) -> u32 =
+                        |source_width, source_height, levels, need_width, need_height| {
                             (31 - (((source_width / need_width).min(source_height / need_height)).max(1)).leading_zeros()).min(levels - 1)
                         };
                     let panel_need = (panel_width.ceil() as u32).max(1);
@@ -246,13 +238,19 @@ fn main() {
                     let cursor_stale =
                         (cursor_target_level, cursor_target_mips) != (cursor_level, cursor_mips);
                     if background_stale || menu_stale || cursor_stale {
-                        let build_image = |transcoder: &basisu::Transcoder<'static>,
-                                           source_width: u32,
-                                           source_height: u32,
-                                           level: u32,
-                                           mips: u32,
-                                           label: &'static str|
-                         -> bevy::image::Image {
+                        let build_image: fn(
+                            &basisu::Transcoder<'static>,
+                            u32,
+                            u32,
+                            u32,
+                            u32,
+                            &'static str,
+                        ) -> bevy::image::Image = |transcoder,
+                                                   source_width,
+                                                   source_height,
+                                                   level,
+                                                   mips,
+                                                   label| {
                             let mut sizes = [0usize; 16];
                             let mut total_bytes = 0usize;
                             for (i, slot) in sizes[..mips as usize].iter_mut().enumerate() {
@@ -306,12 +304,14 @@ fn main() {
                             );
                             image
                         };
+                        let background_ref = &background;
+                        let menu_ref = &menu;
                         let (background_image, menu_image, cursor_image) =
                             std::thread::scope(|scope| {
                                 let background_job = background_stale.then(|| {
-                                    scope.spawn(|| {
+                                    scope.spawn(move || {
                                         build_image(
-                                            &background,
+                                            background_ref,
                                             background_width,
                                             background_height,
                                             background_target_level,
@@ -321,9 +321,9 @@ fn main() {
                                     })
                                 });
                                 let menu_job = menu_stale.then(|| {
-                                    scope.spawn(|| {
+                                    scope.spawn(move || {
                                         build_image(
-                                            &menu,
+                                            menu_ref,
                                             menu_width,
                                             menu_height,
                                             menu_target_level,
@@ -411,7 +411,7 @@ fn main() {
                     ) else {
                         return;
                     };
-                    let alpha_mode = |has_alpha: bool| {
+                    let alpha_mode: fn(bool) -> bevy::sprite::SpriteAlphaMode = |has_alpha| {
                         if has_alpha {
                             bevy::sprite::SpriteAlphaMode::Blend
                         } else {
@@ -514,18 +514,20 @@ fn main() {
                     let exiting = input.just_pressed(bevy::input::keyboard::KeyCode::Escape);
                     let released = input.just_released(bevy::input::keyboard::KeyCode::Escape);
                     let direction = if control {
-                        let dx = (input.pressed(bevy::input::keyboard::KeyCode::KeyD)
-                            || input.pressed(bevy::input::keyboard::KeyCode::ArrowRight))
-                            as i8
-                            - (input.pressed(bevy::input::keyboard::KeyCode::KeyA)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowLeft))
-                                as i8;
-                        let dy = (input.pressed(bevy::input::keyboard::KeyCode::KeyW)
-                            || input.pressed(bevy::input::keyboard::KeyCode::ArrowUp))
-                            as i8
-                            - (input.pressed(bevy::input::keyboard::KeyCode::KeyS)
-                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowDown))
-                                as i8;
+                        let dx = i8::from(
+                            input.pressed(bevy::input::keyboard::KeyCode::KeyD)
+                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowRight),
+                        ) - i8::from(
+                            input.pressed(bevy::input::keyboard::KeyCode::KeyA)
+                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowLeft),
+                        );
+                        let dy = i8::from(
+                            input.pressed(bevy::input::keyboard::KeyCode::KeyW)
+                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowUp),
+                        ) - i8::from(
+                            input.pressed(bevy::input::keyboard::KeyCode::KeyS)
+                                || input.pressed(bevy::input::keyboard::KeyCode::ArrowDown),
+                        );
                         bevy::math::Vec2::new(dx as f32, dy as f32).normalize_or_zero()
                     } else {
                         bevy::math::Vec2::ZERO
