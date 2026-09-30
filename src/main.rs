@@ -15,6 +15,9 @@ fn main() {
     let (background_width, background_height) = background.base_dimensions();
     let (menu_width, menu_height) = menu.base_dimensions();
     let (cursor_width, cursor_height) = cursor.base_dimensions();
+    let background_alpha = background.has_alpha();
+    let menu_alpha = menu.has_alpha();
+    let cursor_alpha = cursor.has_alpha();
     let select_level: fn(u32, u32, u32, u32, u32) -> u32 =
         |source_width, source_height, levels, need_width, need_height| {
             (31 - (((source_width / need_width).min(source_height / need_height)).max(1))
@@ -115,13 +118,15 @@ fn main() {
     drop(cursor);
     drop(menu);
     drop(background);
+    let clamp = bevy::render::render_resource::AddressMode::ClampToEdge;
+    let linear = bevy::render::render_resource::FilterMode::Linear;
     let sampler_descriptor = bevy::image::ImageSampler::Descriptor(
         bevy::render::render_resource::SamplerDescriptor {
-            address_mode_u: bevy::render::render_resource::AddressMode::ClampToEdge,
-            address_mode_v: bevy::render::render_resource::AddressMode::ClampToEdge,
-            address_mode_w: bevy::render::render_resource::AddressMode::ClampToEdge,
-            mag_filter: bevy::render::render_resource::FilterMode::Linear,
-            min_filter: bevy::render::render_resource::FilterMode::Linear,
+            address_mode_u: clamp,
+            address_mode_v: clamp,
+            address_mode_w: clamp,
+            mag_filter: linear,
+            min_filter: linear,
             mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
             ..Default::default()
         }
@@ -167,6 +172,9 @@ fn main() {
     ));
     let fullscreen =
         bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
+    let grab = bevy::window::CursorGrabMode::Confined;
+    let low_power =
+        bevy::winit::UpdateMode::reactive_low_power(std::time::Duration::from_secs(1));
     let smootherstep: fn(f32) -> f32 = |t| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
     let mut phase: u8 = 0;
     let mut warmup_frames: u16 = 180;
@@ -185,58 +193,67 @@ fn main() {
     bevy::app::App::new()
         .insert_resource(bevy::camera::ClearColor(bevy::color::Color::BLACK))
         .add_plugins((
-            bevy::app::TaskPoolPlugin::default(),
-            bevy::diagnostic::FrameCountPlugin,
-            bevy::time::TimePlugin,
-            bevy::transform::TransformPlugin,
-            bevy::input::InputPlugin,
-            bevy::input_focus::InputFocusPlugin,
-            bevy::window::WindowPlugin {
-                primary_window: Some(bevy::window::Window {
-                    title: String::from("Subsystem for Arxumbra"),
-                    name: Some(String::from("subsystem-for-arxumbra")),
-                    mode: fullscreen,
-                    present_mode: bevy::window::PresentMode::AutoVsync,
-                    decorations: false,
-                    resizable: false,
-                    visible: true,
-                    desired_maximum_frame_latency: core::num::NonZeroU32::new(2),
-                    ..Default::default()
-                }),
-                primary_cursor_options: Some(bevy::window::CursorOptions {
-                    visible: false,
-                    grab_mode: bevy::window::CursorGrabMode::None,
-                    hit_test: true,
-                }),
-                exit_condition: bevy::window::ExitCondition::OnPrimaryClosed,
-                close_when_requested: true,
-            },
-            bevy::asset::AssetPlugin::default(),
-        ))
-        .add_plugins((
-            bevy::winit::WinitPlugin::default(),
-            bevy::image::ImagePlugin::default(),
-            bevy::mesh::MeshPlugin,
-            bevy::camera::CameraPlugin,
-            bevy::render::RenderPlugin {
-                render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
-                    bevy::render::settings::WgpuSettings {
-                        backends: Some(bevy::render::settings::Backends::PRIMARY),
-                        power_preference:
-                            bevy::render::settings::PowerPreference::HighPerformance,
-                        disabled_features: Some(
-                            bevy::render::settings::WgpuFeatures::TEXTURE_BINDING_ARRAY
-                                | bevy::render::settings::WgpuFeatures::BUFFER_BINDING_ARRAY,
-                        ),
+            (
+                bevy::app::TaskPoolPlugin::default(),
+                bevy::app::TerminalCtrlCHandlerPlugin,
+                bevy::time::TimePlugin,
+                bevy::diagnostic::FrameCountPlugin,
+                bevy::transform::TransformPlugin,
+                bevy::input::InputPlugin,
+                bevy::input_focus::InputFocusPlugin,
+                bevy::window::WindowPlugin {
+                    primary_window: Some(bevy::window::Window {
+                        title: String::from("Subsystem for Arxumbra"),
+                        name: Some(String::from("subsystem-for-arxumbra")),
+                        mode: fullscreen,
+                        present_mode: bevy::window::PresentMode::AutoVsync,
+                        decorations: false,
+                        resizable: false,
+                        visible: false,
+                        desired_maximum_frame_latency: core::num::NonZeroU32::new(2),
                         ..Default::default()
-                    },
-                )),
-                synchronous_pipeline_compilation: true,
-                ..Default::default()
-            },
-            bevy::core_pipeline::CorePipelinePlugin,
-            bevy::sprite::SpritePlugin,
-            bevy::sprite_render::SpriteRenderPlugin,
+                    }),
+                    primary_cursor_options: Some(bevy::window::CursorOptions {
+                        visible: false,
+                        grab_mode: grab,
+                        hit_test: false,
+                    }),
+                    exit_condition: bevy::window::ExitCondition::OnPrimaryClosed,
+                    close_when_requested: true,
+                },
+                bevy::a11y::AccessibilityPlugin,
+                bevy::asset::AssetPlugin {
+                    file_path: String::new(),
+                    watch_for_changes_override: Some(false),
+                    ..Default::default()
+                },
+                bevy::mesh::MeshPlugin,
+            ),
+            (
+                bevy::camera::CameraPlugin,
+                bevy::winit::WinitPlugin::default(),
+                bevy::render::RenderPlugin {
+                    render_creation: bevy::render::settings::RenderCreation::Automatic(Box::new(
+                        bevy::render::settings::WgpuSettings {
+                            backends: Some(bevy::render::settings::Backends::PRIMARY),
+                            power_preference:
+                                bevy::render::settings::PowerPreference::HighPerformance,
+                            disabled_features: Some(
+                                bevy::render::settings::WgpuFeatures::TEXTURE_BINDING_ARRAY
+                                    | bevy::render::settings::WgpuFeatures::BUFFER_BINDING_ARRAY,
+                            ),
+                            ..Default::default()
+                        },
+                    )),
+                    synchronous_pipeline_compilation: true,
+                    ..Default::default()
+                },
+                bevy::image::ImagePlugin::default(),
+                bevy::render::pipelined_rendering::PipelinedRenderingPlugin,
+                bevy::core_pipeline::CorePipelinePlugin,
+                bevy::sprite::SpritePlugin,
+                bevy::sprite_render::SpriteRenderPlugin,
+            ),
         ))
         .insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -246,7 +263,7 @@ fn main() {
             bevy::app::Update,
             move |mut commands: bevy::ecs::system::Commands,
                   mut windows: bevy::ecs::system::Query<
-                      (bevy::ecs::entity::Entity, &mut bevy::window::Window),
+                      &mut bevy::window::Window,
                       bevy::ecs::query::With<bevy::window::PrimaryWindow>,
                   >,
                   mut window_cursors: bevy::ecs::system::Query<
@@ -256,7 +273,6 @@ fn main() {
                   mut images: bevy::ecs::system::ResMut<bevy::asset::Assets<bevy::image::Image>>,
                   mut sprites: bevy::ecs::system::Query<(
                       &mut bevy::transform::components::Transform,
-                      &mut bevy::sprite::Sprite,
                       &mut bevy::camera::visibility::Visibility,
                       Option<&mut bevy::mesh::Mesh2d>,
                   )>,
@@ -267,29 +283,28 @@ fn main() {
                   mut winit: bevy::ecs::system::ResMut<bevy::winit::WinitSettings>| {
                 let delta = time.delta_secs().min(0.05);
                 let booting = phase == 0;
-                let (window_entity, mut window) = windows.single_mut().expect("primary window");
+                let mut window = windows.single_mut().expect("primary window");
                 if window.mode != fullscreen {
                     window.mode = fullscreen;
                 }
                 if window.present_mode != bevy::window::PresentMode::AutoVsync {
                     window.present_mode = bevy::window::PresentMode::AutoVsync;
                 }
-                if !window.visible {
-                    window.visible = true;
+                if window.decorations {
+                    window.decorations = false;
                 }
-                if window_cursors.is_empty() {
-                    commands
-                        .entity(window_entity)
-                        .insert(bevy::window::CursorOptions {
-                            visible: false,
-                            grab_mode: bevy::window::CursorGrabMode::None,
-                            hit_test: true,
-                        });
-                } else {
-                    let mut cursor_options =
-                        window_cursors.single_mut().expect("window cursor options");
+                if window.resizable {
+                    window.resizable = false;
+                }
+                if let Ok(mut cursor_options) = window_cursors.single_mut() {
                     if cursor_options.visible {
                         cursor_options.visible = false;
+                    }
+                    if cursor_options.grab_mode != grab {
+                        cursor_options.grab_mode = grab;
+                    }
+                    if cursor_options.hit_test {
+                        cursor_options.hit_test = false;
                     }
                 }
                 let physical_width = window.physical_width();
@@ -316,23 +331,44 @@ fn main() {
                         images.add(background_upload.take().expect("background image"));
                     let menu_sheet = images.add(menu_upload.take().expect("menu image"));
                     let cursor_sheet = images.add(cursor_upload.take().expect("cursor image"));
+                    let alpha_mode: fn(bool) -> bevy::sprite::SpriteAlphaMode = |has_alpha| {
+                        if has_alpha {
+                            bevy::sprite::SpriteAlphaMode::Blend
+                        } else {
+                            bevy::sprite::SpriteAlphaMode::Opaque
+                        }
+                    };
                     let cover =
                         (width / background_width as f32).max(height / background_height as f32);
                     cursor_position = bevy::math::Vec2::ZERO;
                     cursor_velocity = bevy::math::Vec2::ZERO;
-                    commands.spawn(bevy::camera::Camera2d);
+                    commands.spawn((
+                        bevy::camera::Camera2d,
+                        bevy::camera::Camera {
+                            clear_color: bevy::camera::ClearColorConfig::Custom(
+                                bevy::color::Color::BLACK,
+                            ),
+                            ..Default::default()
+                        },
+                        bevy::render::view::Msaa::Off,
+                    ));
                     background_entity = commands
                         .spawn((
                             bevy::sprite::Sprite {
                                 image: background_sheet,
-                                custom_size: Some(bevy::math::Vec2::new(
-                                    background_width as f32 * cover,
-                                    background_height as f32 * cover,
-                                )),
-                                alpha_mode: bevy::sprite::SpriteAlphaMode::Opaque,
+                                custom_size: Some(bevy::math::Vec2::ONE),
+                                color: bevy::color::Color::WHITE,
+                                alpha_mode: alpha_mode(background_alpha),
                                 ..Default::default()
                             },
-                            bevy::transform::components::Transform::from_xyz(0.0, 0.0, 0.0),
+                            bevy::transform::components::Transform::from_scale(
+                                bevy::math::Vec3::new(
+                                    background_width as f32 * cover,
+                                    background_height as f32 * cover,
+                                    1.0,
+                                ),
+                            ),
+                            bevy::camera::visibility::Visibility::Visible,
                             bevy::camera::visibility::NoFrustumCulling,
                         ))
                         .id();
@@ -340,12 +376,16 @@ fn main() {
                         .spawn((
                             bevy::sprite::Sprite {
                                 image: menu_sheet,
-                                custom_size: Some(bevy::math::Vec2::new(panel_width, height)),
+                                custom_size: Some(bevy::math::Vec2::ONE),
                                 color: bevy::color::Color::srgba(1.0, 1.0, 1.0, 0.92),
-                                alpha_mode: bevy::sprite::SpriteAlphaMode::Blend,
+                                alpha_mode: alpha_mode(menu_alpha),
                                 ..Default::default()
                             },
-                            bevy::transform::components::Transform::from_xyz(closed, 0.0, 1.0),
+                            bevy::transform::components::Transform {
+                                translation: bevy::math::Vec3::new(closed, 0.0, 1.0),
+                                scale: bevy::math::Vec3::new(panel_width, height, 1.0),
+                                ..Default::default()
+                            },
                             bevy::camera::visibility::Visibility::Hidden,
                             bevy::camera::visibility::NoFrustumCulling,
                         ))
@@ -354,14 +394,23 @@ fn main() {
                         .spawn((
                             bevy::sprite::Sprite {
                                 image: cursor_sheet,
-                                custom_size: Some(bevy::math::Vec2::splat(cursor_extent)),
-                                alpha_mode: bevy::sprite::SpriteAlphaMode::Blend,
+                                custom_size: Some(bevy::math::Vec2::ONE),
+                                color: bevy::color::Color::WHITE,
+                                alpha_mode: alpha_mode(cursor_alpha),
                                 ..Default::default()
                             },
-                            bevy::transform::components::Transform::from_xyz(0.0, 0.0, 2.0),
+                            bevy::transform::components::Transform {
+                                translation: bevy::math::Vec3::new(0.0, 0.0, 2.0),
+                                scale: bevy::math::Vec3::new(cursor_extent, cursor_extent, 1.0),
+                                ..Default::default()
+                            },
+                            bevy::camera::visibility::Visibility::Visible,
                             bevy::camera::visibility::NoFrustumCulling,
                         ))
                         .id();
+                    if !window.visible {
+                        window.visible = true;
+                    }
                     viewport = (physical_width, physical_height);
                     warmup_frames = 180;
                     let ready_now = std::time::Instant::now();
@@ -371,22 +420,24 @@ fn main() {
                     phase = 1;
                     return;
                 }
+                if !window.visible {
+                    window.visible = true;
+                }
                 if geometry_changed {
                     let cover =
                         (width / background_width as f32).max(height / background_height as f32);
                     cursor_position = cursor_position.max(-cursor_limit).min(cursor_limit);
-                    if let Ok((_, mut sprite, _, _)) = sprites.get_mut(background_entity) {
-                        sprite.custom_size = Some(bevy::math::Vec2::new(
+                    if let Ok((mut transform, _, _)) = sprites.get_mut(background_entity) {
+                        transform.scale = bevy::math::Vec3::new(
                             background_width as f32 * cover,
                             background_height as f32 * cover,
-                        ));
+                            1.0,
+                        );
                     }
-                    if let Ok((mut transform, mut sprite, mut visibility, _)) =
-                        sprites.get_mut(panel_entity)
-                    {
+                    if let Ok((mut transform, mut visibility, _)) = sprites.get_mut(panel_entity) {
                         let eased = smootherstep(panel_progress);
                         transform.translation.x = closed + (open_x - closed) * eased;
-                        sprite.custom_size = Some(bevy::math::Vec2::new(panel_width, height));
+                        transform.scale = bevy::math::Vec3::new(panel_width, height, 1.0);
                         if panel_progress > 0.0 {
                             *visibility = bevy::camera::visibility::Visibility::Visible;
                             panel_drawn = true;
@@ -395,10 +446,10 @@ fn main() {
                             panel_drawn = false;
                         }
                     }
-                    if let Ok((mut transform, mut sprite, _, _)) = sprites.get_mut(cursor_entity) {
-                        sprite.custom_size = Some(bevy::math::Vec2::splat(cursor_extent));
+                    if let Ok((mut transform, _, _)) = sprites.get_mut(cursor_entity) {
                         transform.translation.x = cursor_position.x;
                         transform.translation.y = cursor_position.y;
+                        transform.scale = bevy::math::Vec3::new(cursor_extent, cursor_extent, 1.0);
                     }
                     viewport = (physical_width, physical_height);
                     warmup_frames = 180;
@@ -410,14 +461,15 @@ fn main() {
                 }
                 if warmup_frames > 0 {
                     warmup_frames -= 1;
-                    if warmup_frames == 176
+                    if warmup_frames == 179
+                        || warmup_frames == 176
                         || warmup_frames == 168
                         || warmup_frames == 152
                         || warmup_frames == 120
                         || warmup_frames == 60
                         || warmup_frames == 1
                     {
-                        for (_, _, _, mesh2d) in sprites.iter_mut() {
+                        for (_, _, mesh2d) in sprites.iter_mut() {
                             if let Some(mut mesh) = mesh2d {
                                 mesh.0 = mesh.0.clone();
                             }
@@ -428,10 +480,18 @@ fn main() {
                 let control = input.pressed(bevy::input::keyboard::KeyCode::ControlLeft)
                     || input.pressed(bevy::input::keyboard::KeyCode::ControlRight);
                 let direction = if control {
-                    let right = input.pressed(bevy::input::keyboard::KeyCode::ArrowRight) as i8
-                        - input.pressed(bevy::input::keyboard::KeyCode::ArrowLeft) as i8;
-                    let up = input.pressed(bevy::input::keyboard::KeyCode::ArrowUp) as i8
-                        - input.pressed(bevy::input::keyboard::KeyCode::ArrowDown) as i8;
+                    let right = (input.pressed(bevy::input::keyboard::KeyCode::ArrowRight)
+                        || input.pressed(bevy::input::keyboard::KeyCode::KeyD))
+                        as i8
+                        - (input.pressed(bevy::input::keyboard::KeyCode::ArrowLeft)
+                            || input.pressed(bevy::input::keyboard::KeyCode::KeyA))
+                            as i8;
+                    let up = (input.pressed(bevy::input::keyboard::KeyCode::ArrowUp)
+                        || input.pressed(bevy::input::keyboard::KeyCode::KeyW))
+                        as i8
+                        - (input.pressed(bevy::input::keyboard::KeyCode::ArrowDown)
+                            || input.pressed(bevy::input::keyboard::KeyCode::KeyS))
+                            as i8;
                     bevy::math::Vec2::new(right as f32, up as f32).normalize_or_zero()
                 } else {
                     bevy::math::Vec2::ZERO
@@ -450,7 +510,7 @@ fn main() {
                 cursor_position += cursor_velocity * delta;
                 cursor_position = cursor_position.max(-cursor_limit).min(cursor_limit);
                 if cursor_position != previous {
-                    if let Ok((mut transform, _, _, _)) = sprites.get_mut(cursor_entity) {
+                    if let Ok((mut transform, _, _)) = sprites.get_mut(cursor_entity) {
                         transform.translation.x = cursor_position.x;
                         transform.translation.y = cursor_position.y;
                     }
@@ -467,7 +527,7 @@ fn main() {
                     };
                     panel_progress = progress;
                     let eased = smootherstep(progress);
-                    if let Ok((mut transform, _, mut visibility, _)) =
+                    if let Ok((mut transform, mut visibility, mesh2d)) =
                         sprites.get_mut(panel_entity)
                     {
                         transform.translation.x = closed + (open_x - closed) * eased;
@@ -475,6 +535,9 @@ fn main() {
                             if !panel_drawn {
                                 *visibility = bevy::camera::visibility::Visibility::Visible;
                                 panel_drawn = true;
+                                if let Some(mut mesh) = mesh2d {
+                                    mesh.0 = mesh.0.clone();
+                                }
                             }
                         } else if panel_drawn {
                             *visibility = bevy::camera::visibility::Visibility::Hidden;
@@ -517,12 +580,8 @@ fn main() {
                 } else if phase == 1 {
                     if let Some(deadline) = idle_deadline {
                         if deadline <= now {
-                            winit.focused_mode = bevy::winit::UpdateMode::reactive_low_power(
-                                std::time::Duration::from_secs(1),
-                            );
-                            winit.unfocused_mode = bevy::winit::UpdateMode::reactive_low_power(
-                                std::time::Duration::from_secs(1),
-                            );
+                            winit.focused_mode = low_power;
+                            winit.unfocused_mode = low_power;
                             idle_deadline = None;
                             phase = 2;
                         }

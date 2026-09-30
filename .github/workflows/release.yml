@@ -87,13 +87,20 @@ jobs:
           [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
           icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
           [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
+          shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
+          [ -n "$shooter" ] || { echo "::error::weston-screenshooter missing"; exit 1; }
           WAYLAND_DISPLAY=arx-verify VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
           app_pid=$!
           rendered=0
           for _ in $(seq 1 45); do
-            kill -0 "$app_pid" 2>/dev/null || { tail -n 15 /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              wait "$app_pid" 2>/dev/null; rc=$?
+              echo "::error::app exited early with status $rc"
+              tail -n 15 /tmp/arx.out /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done
+              exit 1
+            fi
             rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
-            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify weston-screenshooter >/dev/null 2>&1); then
+            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify "$shooter" >/dev/null 2>&1); then
               if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
           while pos<len(data):
            l,t=struct.unpack('>I4s',data[pos:pos+8]); b=data[pos+8:pos+8+l]; pos+=12+l
@@ -225,13 +232,20 @@ jobs:
           [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
           icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
           [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
+          shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
+          [ -n "$shooter" ] || { echo "::error::weston-screenshooter missing"; exit 1; }
           WAYLAND_DISPLAY=arx-verify VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
           app_pid=$!
           rendered=0
           for _ in $(seq 1 45); do
-            kill -0 "$app_pid" 2>/dev/null || { tail -n 15 /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              wait "$app_pid" 2>/dev/null; rc=$?
+              echo "::error::app exited early with status $rc"
+              tail -n 15 /tmp/arx.out /tmp/arx.err /tmp/weston.log | while IFS= read -r l; do echo "::error::$l"; done
+              exit 1
+            fi
             rm -f "$XDG_RUNTIME_DIR"/wayland-screenshot-*.png wayland-screenshot-*.png
-            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify weston-screenshooter >/dev/null 2>&1); then
+            if (cd "$XDG_RUNTIME_DIR" && WAYLAND_DISPLAY=arx-verify "$shooter" >/dev/null 2>&1); then
               if python3 -c "import glob,os,struct,sys,zlib; files=sorted(glob.glob(os.path.join(os.environ['XDG_RUNTIME_DIR'],'wayland-screenshot-*.png'))+glob.glob('wayland-screenshot-*.png')); data=open(files[-1],'rb').read() if files else b''; sys.exit(2) if data[:8]!=b'\x89PNG\r\n\x1a\n' else None; pos=8; w=h=ctype=0; idat=bytearray()
           while pos<len(data):
            l,t=struct.unpack('>I4s',data[pos:pos+8]); b=data[pos+8:pos+8+l]; pos+=12+l
