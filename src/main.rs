@@ -622,7 +622,7 @@ fn main() {
                             cam_tw = sz.x;
                             cam_th = sz.y;
                         }
-                        vis_m2d = vis.get::<bevy::mesh::Mesh2d>().len();
+                        vis_m2d = vis.get(core::any::TypeId::of::<bevy::mesh::Mesh2d>()).len();
                     }
                     let mut sp_total = 0usize;
                     let mut sp_mesh = 0usize;
