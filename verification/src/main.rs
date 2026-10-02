@@ -27,7 +27,7 @@ fn main() {
     let background = basisu::Transcoder::new(background_source).expect("background ktx2");
     let menu = basisu::Transcoder::new(menu_source).expect("menu ktx2");
     let cursor = basisu::Transcoder::new(cursor_source).expect("cursor ktx2");
-    assert!(!background.has_alpha() && menu.has_alpha() && cursor.has_alpha());
+    assert!(background.has_alpha() && menu.has_alpha() && cursor.has_alpha());
 
     let sheets = [
         ("background", &background),
