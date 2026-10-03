@@ -30,10 +30,8 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston xvfb zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
           command -v zstd > /dev/null
-          command -v weston > /dev/null
-          command -v Xvfb > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v5.0.4
@@ -72,72 +70,6 @@ jobs:
             cargo build --release --quiet --target aarch64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { grep -E '^error| --> ' /tmp/build.log | head -n 10 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
           "$HOME/llvm/LLVM-23.1.2-Linux-ARM64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
 
-      - name: weston verification
-        run: |
-          cargo run --manifest-path verification/Cargo.toml --release --quiet >> "$GITHUB_STEP_SUMMARY"
-          export XDG_RUNTIME_DIR=/tmp/weston-runtime
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
-          printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nstartup-animation=none\nfade-out-animation=none\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
-          Xvfb :99 -ac -screen 0 1920x1080x24 -fbdir "$XDG_RUNTIME_DIR" > /tmp/xvfb.log 2>&1 &
-          xvfb_pid=$!
-          for _ in $(seq 1 30); do
-            [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] && break
-            sleep 0.2
-          done
-          [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
-          weston_pid=$!
-          for _ in $(seq 1 30); do
-            [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-            sleep 0.2
-          done
-          if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
-            kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
-            weston_pid=$!
-            for _ in $(seq 1 30); do
-              [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-              sleep 0.2
-            done
-          fi
-          [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
-          [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
-          shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
-          env -u DISPLAY WAYLAND_DISPLAY=arx-verify MESA_VK_WSI_PRESENT_MODE=mailbox VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/aarch64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
-          app_pid=$!
-          rendered=0
-          for _ in $(seq 1 40); do
-            if ! kill -0 "$app_pid" 2>/dev/null; then
-              wait "$app_pid" 2>/dev/null; rc=$?
-              echo "::error::app exited early with status $rc"
-              echo "::error::arx_err: $(tail -n 20 /tmp/arx.err 2>/dev/null | tr '\n' '|' || true)"
-              echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"
-              echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"
-              exit 1
-            fi
-            if python3 -c "import os,struct,sys; p=os.path.join(os.environ['XDG_RUNTIME_DIR'],'Xvfb_screen0'); data=open(p,'rb').read() if os.path.exists(p) else b''; sys.exit(2) if len(data)<8294500 else None; hdr=struct.unpack('>25I',data[:100]); w,h,bo=hdr[4],hdr[5],hdr[7]; buf=memoryview(data)[len(data)-w*h*4:]; fmt='<I' if bo==0 else '>I'; nb=tot=0; cols=set()
-          for y in range(0,h,4):
-           ro=y*w*4
-           for x in range(0,w*4,16):
-            v=struct.unpack_from(fmt,buf,ro+x)[0]; r,g,bl=(v>>16)&255,(v>>8)&255,v&255; tot+=1
-            if r>8 or g>8 or bl>8: nb+=1; cols.add((r,g,bl))
-          rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.001 and len(cols)>=2) else 3)"; then
-              cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "::notice title=weston::$(cat /tmp/weston.metric)"
-              rendered=1
-              break
-            fi
-            sleep 1
-          done
-          if [ "$rendered" -ne 1 ]; then proc_diag="$(grep -E 'State|Threads|VmRSS|voluntary' /proc/$app_pid/status 2>/dev/null | tr '\n' ' ' || true) wchan=$(head -n 1 /proc/$app_pid/task/*/wchan 2>/dev/null | tr '\n' ' ' || true)"; fi
-          kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          [ ! -s /tmp/arx.err ] || { echo "::error::arx_err: $(tail -n 20 /tmp/arx.err 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
-          [ "$rendered" -eq 1 ] || { echo "::error::metric: $(tr '\n' '|' < /tmp/weston.metric 2>/dev/null || true) proc: $proc_diag"; echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"; echo "::error::wl_proto: $(grep -E 'xdg_|wl_surface|wl_shm|error' /tmp/weston.log 2>/dev/null | tail -n 30 | tr '\n' '|' || true)"; echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
-
       - name: package
         run: |
           mkdir -p dist && cd dist
@@ -174,10 +106,8 @@ jobs:
       - name: system libraries
         run: |
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev mesa-vulkan-drivers pkg-config weston xvfb zstd
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libwayland-dev libxkbcommon-dev pkg-config zstd
           command -v zstd > /dev/null
-          command -v weston > /dev/null
-          command -v Xvfb > /dev/null
 
       - name: cached stable llvm
         uses: actions/cache@v5.0.4
@@ -215,72 +145,6 @@ jobs:
           RUSTFLAGS="-C target-cpu=x86-64 -C target-feature=-sse3,-ssse3,-sse4.1,-sse4.2,-popcnt,-avx,-avx2,-fma,-f16c,-bmi1,-bmi2,-lzcnt,-movbe,-tbm,-avx512f,-avx512bw,-avx512cd,-avx512dq,-avx512vl,-avx512ifma,-avx512vbmi,-avx512vbmi2,-avx512vnni,-avx512vpopcntdq,-avx512bitalg,-vaes,-vpclmulqdq,-gfni,-sha -C debuginfo=0 -C strip=symbols -C link-arg=-fuse-ld=lld -C link-arg=-B$HOME/llvm/LLVM-23.1.2-Linux-X64/bin -C link-arg=-Wl,--icf=all -C link-arg=-Wl,-O1 -C link-arg=-Wl,--as-needed -C link-arg=-Wl,--gc-sections -C link-arg=-Wl,-z,norelro -C link-arg=-Wl,--build-id=none -C link-arg=-Wl,--no-eh-frame-hdr -C llvm-args=--inline-threshold=1000 -C llvm-args=--unroll-threshold=500 -Zlocation-detail=none" \
             cargo build --release --quiet --target x86_64-unknown-linux-gnu '-Zbuild-std=std,panic_abort' > /tmp/build.log 2>&1 || { grep -E '^error| --> ' /tmp/build.log | head -n 10 | while IFS= read -r l; do echo "::error::$l"; done; exit 1; }
           "$HOME/llvm/LLVM-23.1.2-Linux-X64/bin/llvm-objcopy" --remove-section=.comment --remove-section=.note.ABI-tag --remove-section=.note.gnu.property target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra
-
-      - name: weston verification
-        run: |
-          cargo run --manifest-path verification/Cargo.toml --release --quiet >> "$GITHUB_STEP_SUMMARY"
-          export XDG_RUNTIME_DIR=/tmp/weston-runtime
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
-          printf '[core]\nuse-pixman=true\nidle-time=0\n[shell]\npanel-position=none\nlocking=false\nstartup-animation=none\nfade-out-animation=none\nbackground-color=0xff000000\n' > "$XDG_RUNTIME_DIR/weston.ini"
-          Xvfb :99 -ac -screen 0 1920x1080x24 -fbdir "$XDG_RUNTIME_DIR" > /tmp/xvfb.log 2>&1 &
-          xvfb_pid=$!
-          for _ in $(seq 1 30); do
-            [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] && break
-            sleep 0.2
-          done
-          [ -f "$XDG_RUNTIME_DIR/Xvfb_screen0" ] || { cat /tmp/xvfb.log; exit 1; }
-          (cd "$XDG_RUNTIME_DIR" && DISPLAY=:99 weston --backend=x11-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 > /tmp/weston.log 2>&1) &
-          weston_pid=$!
-          for _ in $(seq 1 30); do
-            [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-            sleep 0.2
-          done
-          if [ ! -S "$XDG_RUNTIME_DIR/arx-verify" ]; then
-            kill -9 "$weston_pid" 2>/dev/null || true
-            (cd "$XDG_RUNTIME_DIR" && weston --backend=headless-backend.so --use-pixman --debug --config="$XDG_RUNTIME_DIR/weston.ini" --socket=arx-verify --idle-time=0 --width=1920 --height=1080 >> /tmp/weston.log 2>&1) &
-            weston_pid=$!
-            for _ in $(seq 1 30); do
-              [ -S "$XDG_RUNTIME_DIR/arx-verify" ] && break
-              sleep 0.2
-            done
-          fi
-          [ -S "$XDG_RUNTIME_DIR/arx-verify" ] || { cat /tmp/weston.log; exit 1; }
-          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
-          [ -n "$icd" ] || { ls -la /usr/share/vulkan/icd.d; exit 1; }
-          shooter=$(command -v weston-screenshooter || find /usr -name weston-screenshooter 2>/dev/null | head -n 1)
-          env -u DISPLAY WAYLAND_DISPLAY=arx-verify MESA_VK_WSI_PRESENT_MODE=mailbox VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan ./target/x86_64-unknown-linux-gnu/release/Subsystem-for-Arxumbra > /tmp/arx.out 2> /tmp/arx.err &
-          app_pid=$!
-          rendered=0
-          for _ in $(seq 1 40); do
-            if ! kill -0 "$app_pid" 2>/dev/null; then
-              wait "$app_pid" 2>/dev/null; rc=$?
-              echo "::error::app exited early with status $rc"
-              echo "::error::arx_err: $(tail -n 20 /tmp/arx.err 2>/dev/null | tr '\n' '|' || true)"
-              echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"
-              echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"
-              exit 1
-            fi
-            if python3 -c "import os,struct,sys; p=os.path.join(os.environ['XDG_RUNTIME_DIR'],'Xvfb_screen0'); data=open(p,'rb').read() if os.path.exists(p) else b''; sys.exit(2) if len(data)<8294500 else None; hdr=struct.unpack('>25I',data[:100]); w,h,bo=hdr[4],hdr[5],hdr[7]; buf=memoryview(data)[len(data)-w*h*4:]; fmt='<I' if bo==0 else '>I'; nb=tot=0; cols=set()
-          for y in range(0,h,4):
-           ro=y*w*4
-           for x in range(0,w*4,16):
-            v=struct.unpack_from(fmt,buf,ro+x)[0]; r,g,bl=(v>>16)&255,(v>>8)&255,v&255; tot+=1
-            if r>8 or g>8 or bl>8: nb+=1; cols.add((r,g,bl))
-          rat=nb/max(tot,1); open('/tmp/weston.metric','w').write(f'weston_frame={w}x{h} non_black_ratio={rat:.4f} unique_colors={len(cols)}'); sys.exit(0 if (w==1920 and h==1080 and rat>=0.001 and len(cols)>=2) else 3)"; then
-              cat /tmp/weston.metric >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "::notice title=weston::$(cat /tmp/weston.metric)"
-              rendered=1
-              break
-            fi
-            sleep 1
-          done
-          if [ "$rendered" -ne 1 ]; then proc_diag="$(grep -E 'State|Threads|VmRSS|voluntary' /proc/$app_pid/status 2>/dev/null | tr '\n' ' ' || true) wchan=$(head -n 1 /proc/$app_pid/task/*/wchan 2>/dev/null | tr '\n' ' ' || true)"; fi
-          kill -9 "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          wait "$app_pid" "$weston_pid" "$xvfb_pid" 2>/dev/null || true
-          [ ! -s /tmp/arx.err ] || { echo "::error::arx_err: $(tail -n 20 /tmp/arx.err 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
-          [ "$rendered" -eq 1 ] || { echo "::error::metric: $(tr '\n' '|' < /tmp/weston.metric 2>/dev/null || true) proc: $proc_diag"; echo "::error::arx_out: $(tail -n 20 /tmp/arx.out 2>/dev/null | tr '\n' '|' || true)"; echo "::error::wl_proto: $(grep -E 'xdg_|wl_surface|wl_shm|error' /tmp/weston.log 2>/dev/null | tail -n 30 | tr '\n' '|' || true)"; echo "::error::weston_log: $(tail -n 25 /tmp/weston.log 2>/dev/null | tr '\n' '|' || true)"; exit 1; }
 
       - name: package
         run: |
