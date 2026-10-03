@@ -11,7 +11,9 @@ fn main() {
         "FrameCountPlugin",
         "mesh.0 = mesh.0.clone()",
         "assets/000.ktx2",
+        "assets/001.ktx2",
         "basisu::Transcoder::new",
+        "width * 0.333",
     ] {
         assert!(
             main_source.contains(required_token),

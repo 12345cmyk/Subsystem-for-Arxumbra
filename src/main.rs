@@ -5,72 +5,69 @@
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-fn main() {
-    let background_source =
-        std::fs::read("assets/000.ktx2").expect("failed to read assets/000.ktx2");
-    let background = basisu::Transcoder::new(&background_source).expect("ktx2 decode");
-    let (bg_w, bg_h) = background.base_dimensions();
-    let bg_alpha = background.has_alpha();
+fn load_ktx2(path: &str) -> (bevy::image::Image, u32, u32, bool) {
+    let source = std::fs::read(path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+    let tx = basisu::Transcoder::new(&source).unwrap_or_else(|_| panic!("ktx2 decode {path}"));
+    let (w, h) = tx.base_dimensions();
+    let alpha = tx.has_alpha();
     let select_level: fn(u32, u32, u32, u32, u32) -> u32 =
-        |source_width, source_height, levels, need_width, need_height| {
-            (31 - (((source_width / need_width).min(source_height / need_height)).max(1))
-                .leading_zeros())
-            .min(levels - 1)
+        |sw, sh, levels, nw, nh| {
+            (31 - (((sw / nw).min(sh / nh)).max(1)).leading_zeros()).min(levels - 1)
         };
-    let bg_levels = (background.level_count().max(1))
-        .min(select_level(bg_w, bg_h, 13, 1, 1) + 1);
-    let level_bytes: fn(u32, u32, u32) -> usize = |w, h, level| {
-        let lw = (w >> level).max(1);
-        let lh = (h >> level).max(1);
+    let levels = (tx.level_count().max(1)).min(select_level(w, h, 13, 1, 1) + 1);
+    let level_bytes: fn(u32, u32, u32) -> usize = |w, h, l| {
+        let lw = (w >> l).max(1);
+        let lh = (h >> l).max(1);
         (((lw + 3) >> 2) as usize) * (((lh + 3) >> 2) as usize) * 16
     };
-    let bg_total_bytes: usize = (0..bg_levels).map(|l| level_bytes(bg_w, bg_h, l)).sum();
-    let mut bg_pixels = vec![0u8; bg_total_bytes];
-    {
-        let mut offset = 0usize;
-        for level in 0..bg_levels {
-            let size = level_bytes(bg_w, bg_h, level);
-            background
-                .transcode_into(
-                    level,
-                    basisu::TargetFormat::Bc7Rgba,
-                    basisu::DecodeFlags::NONE,
-                    &mut bg_pixels[offset..offset + size],
-                )
-                .expect("bc7 transcode");
-            offset += size;
-        }
+    let total: usize = (0..levels).map(|l| level_bytes(w, h, l)).sum();
+    let mut pixels = vec![0u8; total];
+    let mut offset = 0usize;
+    for level in 0..levels {
+        let sz = level_bytes(w, h, level);
+        tx.transcode_into(
+            level,
+            basisu::TargetFormat::Bc7Rgba,
+            basisu::DecodeFlags::NONE,
+            &mut pixels[offset..offset + sz],
+        )
+        .unwrap_or_else(|_| panic!("bc7 transcode level {level}"));
+        offset += sz;
     }
-    let bg_image = {
-        let mut image = bevy::image::Image::new(
-            bevy::render::render_resource::Extent3d {
-                width: bg_w,
-                height: bg_h,
-                depth_or_array_layers: 1,
-            },
-            bevy::render::render_resource::TextureDimension::D2,
-            bg_pixels,
-            bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
-            bevy::asset::RenderAssetUsages::RENDER_WORLD,
-        );
-        image.texture_descriptor.mip_level_count = bg_levels;
-        let clamp = bevy::render::render_resource::AddressMode::ClampToEdge;
-        let linear = bevy::render::render_resource::FilterMode::Linear;
-        image.sampler = bevy::image::ImageSampler::Descriptor(
-            bevy::render::render_resource::SamplerDescriptor {
-                address_mode_u: clamp,
-                address_mode_v: clamp,
-                address_mode_w: clamp,
-                mag_filter: linear,
-                min_filter: linear,
-                mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
-                ..Default::default()
-            }
-            .into(),
-        );
-        image
-    };
+    let mut image = bevy::image::Image::new(
+        bevy::render::render_resource::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        pixels,
+        bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.mip_level_count = levels;
+    let clamp = bevy::render::render_resource::AddressMode::ClampToEdge;
+    let linear = bevy::render::render_resource::FilterMode::Linear;
+    image.sampler = bevy::image::ImageSampler::Descriptor(
+        bevy::render::render_resource::SamplerDescriptor {
+            address_mode_u: clamp,
+            address_mode_v: clamp,
+            address_mode_w: clamp,
+            mag_filter: linear,
+            min_filter: linear,
+            mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
+            ..Default::default()
+        }
+        .into(),
+    );
+    (image, w, h, alpha)
+}
+
+fn main() {
+    let (bg_image, bg_w, bg_h, bg_alpha) = load_ktx2("assets/000.ktx2");
+    let (menu_image, menu_w, menu_h, menu_alpha) = load_ktx2("assets/001.ktx2");
     let mut bg_upload = Some(bg_image);
+    let mut menu_upload = Some(menu_image);
     let fullscreen =
         bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
     let grab = bevy::window::CursorGrabMode::Confined;
@@ -222,7 +219,7 @@ fn main() {
                     return;
                 }
                 let geometry_changed = (physical_width, physical_height) != viewport;
-                let panel_width = width * 0.21;
+                let panel_width = width * 0.333;
                 let cursor_extent = (height * 0.055).clamp(28.0, 320.0);
                 let cursor_limit = bevy::math::Vec2::new(
                     (width * 0.5 - cursor_extent * 0.5).max(0.0),
@@ -232,6 +229,7 @@ fn main() {
                 let open_x = panel_width * 0.5 - width * 0.5;
                 if booting {
                     let bg_sheet = images.add(bg_upload.take().expect("background image"));
+                    let menu_sheet = images.add(menu_upload.take().expect("menu image"));
                     let pixel = images.add(bevy::image::Image::new(
                         bevy::render::render_resource::Extent3d {
                             width: 1,
@@ -243,7 +241,9 @@ fn main() {
                         bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
                         bevy::asset::RenderAssetUsages::RENDER_WORLD,
                     ));
-                    let cover = (width / bg_w as f32).max(height / bg_h as f32);
+                    let bg_cover = (width / bg_w as f32).max(height / bg_h as f32);
+                    let menu_cover =
+                        (panel_width / menu_w as f32).max(height / menu_h as f32);
                     cursor_position = bevy::math::Vec2::ZERO;
                     cursor_velocity = bevy::math::Vec2::ZERO;
                     commands.spawn((
@@ -283,29 +283,32 @@ fn main() {
                             ))
                             .id()
                     };
-                    let bg_alpha_mode = if bg_alpha {
-                        bevy::sprite::SpriteAlphaMode::Blend
-                    } else {
-                        bevy::sprite::SpriteAlphaMode::Opaque
-                    };
                     background_entity = spawn_layer(
                         bg_sheet,
                         bevy::color::Color::WHITE,
-                        bg_alpha_mode,
+                        if bg_alpha {
+                            bevy::sprite::SpriteAlphaMode::Blend
+                        } else {
+                            bevy::sprite::SpriteAlphaMode::Opaque
+                        },
                         0.0,
                         0.0,
-                        bg_w as f32 * cover,
-                        bg_h as f32 * cover,
+                        bg_w as f32 * bg_cover,
+                        bg_h as f32 * bg_cover,
                         bevy::camera::visibility::Visibility::Visible,
                     );
                     panel_entity = spawn_layer(
-                        pixel.clone(),
-                        bevy::color::Color::srgba(0.25, 0.25, 0.25, 0.92),
-                        bevy::sprite::SpriteAlphaMode::Blend,
+                        menu_sheet,
+                        bevy::color::Color::WHITE,
+                        if menu_alpha {
+                            bevy::sprite::SpriteAlphaMode::Blend
+                        } else {
+                            bevy::sprite::SpriteAlphaMode::Opaque
+                        },
                         closed,
                         1.0,
-                        panel_width,
-                        height,
+                        menu_w as f32 * menu_cover,
+                        menu_h as f32 * menu_cover,
                         bevy::camera::visibility::Visibility::Hidden,
                     );
                     cursor_entity = spawn_layer(
@@ -328,16 +331,25 @@ fn main() {
                     return;
                 }
                 if geometry_changed {
-                    let cover = (width / bg_w as f32).max(height / bg_h as f32);
+                    let bg_cover = (width / bg_w as f32).max(height / bg_h as f32);
+                    let menu_cover =
+                        (panel_width / menu_w as f32).max(height / menu_h as f32);
                     cursor_position = cursor_position.max(-cursor_limit).min(cursor_limit);
                     if let Ok((mut transform, _, _)) = sprites.get_mut(background_entity) {
-                        transform.scale =
-                            bevy::math::Vec3::new(bg_w as f32 * cover, bg_h as f32 * cover, 1.0);
+                        transform.scale = bevy::math::Vec3::new(
+                            bg_w as f32 * bg_cover,
+                            bg_h as f32 * bg_cover,
+                            1.0,
+                        );
                     }
                     if let Ok((mut transform, mut visibility, _)) = sprites.get_mut(panel_entity) {
                         let eased = smootherstep(panel_progress);
                         transform.translation.x = closed + (open_x - closed) * eased;
-                        transform.scale = bevy::math::Vec3::new(panel_width, height, 1.0);
+                        transform.scale = bevy::math::Vec3::new(
+                            menu_w as f32 * menu_cover,
+                            menu_h as f32 * menu_cover,
+                            1.0,
+                        );
                         if panel_progress > 0.0 {
                             *visibility = bevy::camera::visibility::Visibility::Visible;
                             panel_drawn = true;
