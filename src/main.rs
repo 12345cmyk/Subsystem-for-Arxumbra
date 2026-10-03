@@ -6,6 +6,71 @@
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() {
+    let background_source =
+        std::fs::read("assets/000.ktx2").expect("failed to read assets/000.ktx2");
+    let background = basisu::Transcoder::new(&background_source).expect("ktx2 decode");
+    let (bg_w, bg_h) = background.base_dimensions();
+    let bg_alpha = background.has_alpha();
+    let select_level: fn(u32, u32, u32, u32, u32) -> u32 =
+        |source_width, source_height, levels, need_width, need_height| {
+            (31 - (((source_width / need_width).min(source_height / need_height)).max(1))
+                .leading_zeros())
+            .min(levels - 1)
+        };
+    let bg_levels = (background.level_count().max(1))
+        .min(select_level(bg_w, bg_h, 13, 1, 1) + 1);
+    let level_bytes: fn(u32, u32, u32) -> usize = |w, h, level| {
+        let lw = (w >> level).max(1);
+        let lh = (h >> level).max(1);
+        (((lw + 3) >> 2) as usize) * (((lh + 3) >> 2) as usize) * 16
+    };
+    let bg_total_bytes: usize = (0..bg_levels).map(|l| level_bytes(bg_w, bg_h, l)).sum();
+    let mut bg_pixels = vec![0u8; bg_total_bytes];
+    {
+        let mut offset = 0usize;
+        for level in 0..bg_levels {
+            let size = level_bytes(bg_w, bg_h, level);
+            background
+                .transcode_into(
+                    level,
+                    basisu::TargetFormat::Bc7Rgba,
+                    basisu::DecodeFlags::NONE,
+                    &mut bg_pixels[offset..offset + size],
+                )
+                .expect("bc7 transcode");
+            offset += size;
+        }
+    }
+    let bg_image = {
+        let mut image = bevy::image::Image::new(
+            bevy::render::render_resource::Extent3d {
+                width: bg_w,
+                height: bg_h,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            bg_pixels,
+            bevy::render::render_resource::TextureFormat::Bc7RgbaUnormSrgb,
+            bevy::asset::RenderAssetUsages::RENDER_WORLD,
+        );
+        image.texture_descriptor.mip_level_count = bg_levels;
+        let clamp = bevy::render::render_resource::AddressMode::ClampToEdge;
+        let linear = bevy::render::render_resource::FilterMode::Linear;
+        image.sampler = bevy::image::ImageSampler::Descriptor(
+            bevy::render::render_resource::SamplerDescriptor {
+                address_mode_u: clamp,
+                address_mode_v: clamp,
+                address_mode_w: clamp,
+                mag_filter: linear,
+                min_filter: linear,
+                mipmap_filter: bevy::render::render_resource::MipmapFilterMode::Linear,
+                ..Default::default()
+            }
+            .into(),
+        );
+        image
+    };
+    let mut bg_upload = Some(bg_image);
     let fullscreen =
         bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary);
     let grab = bevy::window::CursorGrabMode::Confined;
@@ -166,6 +231,7 @@ fn main() {
                 let closed = panel_width * 0.5 - width * 0.5 - panel_width * 1.05;
                 let open_x = panel_width * 0.5 - width * 0.5;
                 if booting {
+                    let bg_sheet = images.add(bg_upload.take().expect("background image"));
                     let pixel = images.add(bevy::image::Image::new(
                         bevy::render::render_resource::Extent3d {
                             width: 1,
@@ -177,6 +243,7 @@ fn main() {
                         bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
                         bevy::asset::RenderAssetUsages::RENDER_WORLD,
                     ));
+                    let cover = (width / bg_w as f32).max(height / bg_h as f32);
                     cursor_position = bevy::math::Vec2::ZERO;
                     cursor_velocity = bevy::math::Vec2::ZERO;
                     commands.spawn((
@@ -193,6 +260,7 @@ fn main() {
                     ));
                     let mut spawn_layer = |image: bevy::asset::Handle<bevy::image::Image>,
                                            color: bevy::color::Color,
+                                           alpha_mode: bevy::sprite::SpriteAlphaMode,
                                            x: f32,
                                            z: f32,
                                            sx: f32,
@@ -205,7 +273,7 @@ fn main() {
                                     image,
                                     custom_size: Some(bevy::math::Vec2::ONE),
                                     color,
-                                    alpha_mode: bevy::sprite::SpriteAlphaMode::Blend,
+                                    alpha_mode,
                                     ..Default::default()
                                 },
                                 bevy::transform::components::Transform::from_xyz(x, 0.0, z)
@@ -215,18 +283,25 @@ fn main() {
                             ))
                             .id()
                     };
+                    let bg_alpha_mode = if bg_alpha {
+                        bevy::sprite::SpriteAlphaMode::Blend
+                    } else {
+                        bevy::sprite::SpriteAlphaMode::Opaque
+                    };
                     background_entity = spawn_layer(
-                        pixel.clone(),
-                        bevy::color::Color::BLACK,
+                        bg_sheet,
+                        bevy::color::Color::WHITE,
+                        bg_alpha_mode,
                         0.0,
                         0.0,
-                        width,
-                        height,
+                        bg_w as f32 * cover,
+                        bg_h as f32 * cover,
                         bevy::camera::visibility::Visibility::Visible,
                     );
                     panel_entity = spawn_layer(
                         pixel.clone(),
                         bevy::color::Color::srgba(0.25, 0.25, 0.25, 0.92),
+                        bevy::sprite::SpriteAlphaMode::Blend,
                         closed,
                         1.0,
                         panel_width,
@@ -236,6 +311,7 @@ fn main() {
                     cursor_entity = spawn_layer(
                         pixel,
                         bevy::color::Color::srgb(0.0, 1.0, 1.0),
+                        bevy::sprite::SpriteAlphaMode::Blend,
                         0.0,
                         2.0,
                         cursor_extent,
@@ -252,9 +328,11 @@ fn main() {
                     return;
                 }
                 if geometry_changed {
+                    let cover = (width / bg_w as f32).max(height / bg_h as f32);
                     cursor_position = cursor_position.max(-cursor_limit).min(cursor_limit);
                     if let Ok((mut transform, _, _)) = sprites.get_mut(background_entity) {
-                        transform.scale = bevy::math::Vec3::new(width, height, 1.0);
+                        transform.scale =
+                            bevy::math::Vec3::new(bg_w as f32 * cover, bg_h as f32 * cover, 1.0);
                     }
                     if let Ok((mut transform, mut visibility, _)) = sprites.get_mut(panel_entity) {
                         let eased = smootherstep(panel_progress);

@@ -10,6 +10,8 @@ fn main() {
         "NoFrustumCulling",
         "FrameCountPlugin",
         "mesh.0 = mesh.0.clone()",
+        "assets/000.ktx2",
+        "basisu::Transcoder::new",
     ] {
         assert!(
             main_source.contains(required_token),
