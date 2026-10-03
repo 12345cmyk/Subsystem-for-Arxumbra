@@ -2,6 +2,3 @@
 name = "verification"
 version = "0.0.10"
 edition = "2024"
-
-[dependencies]
-basisu = { git = "https://github.com/marcogomez/basisu" }
